@@ -41,6 +41,7 @@ const DEFAULTS = {
   background: null,
   interval: 300,
   sshenabled: true,
+  keepalive: 0,
   updated_at: new Date().toISOString()
 };
 
@@ -198,7 +199,8 @@ app.get('/api/poll', (_req, res) => {
   const d = load();
   const interval = (d.interval && d.interval >= 60) ? d.interval : 300;
   const ssh = d.sshenabled === true;
-  res.json({ t: refreshToken, wifi: wifiEnabled, interval, ssh });
+  const keepalive = (d.keepalive && d.keepalive >= 0) ? d.keepalive : 0;
+  res.json({ t: refreshToken, wifi: wifiEnabled, interval, ssh, keepalive });
 });
 
 app.post('/api/wifi/:state', (req, res) => {
@@ -211,6 +213,14 @@ app.post('/api/ssh/:state', (req, res) => {
   d.sshenabled = req.params.state === 'on';
   save(d);
   res.json({ ok: true, ssh: d.sshenabled });
+});
+
+app.post('/api/keepalive', (req, res) => {
+  const d = load();
+  const n = parseInt(req.body.keepalive, 10);
+  d.keepalive = (n && n >= 0) ? n : 0;
+  save(d);
+  res.json({ ok: true, keepalive: d.keepalive });
 });
 
 app.post('/api/interval', (req, res) => {
@@ -438,6 +448,18 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
         <button class="btn" id="ssh-btn" onclick="toggleSsh()" style="flex:1;padding:8px 0;font-size:11px;opacity:0.6">SSH ◉</button>
       </div>
       <div style="margin-bottom:8px">
+        <label style="font-size:9px;letter-spacing:1px">WiFi keep-alive</label>
+        <select id="keepalive-sel" onchange="setKeepalive(this)" style="width:100%;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;color:var(--text);font-size:11px;font-family:'Helvetica Neue',Arial,sans-serif;outline:none;margin-top:3px">
+          <option value="0">Off immediately</option>
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="300">5 minutes</option>
+          <option value="900">15 minutes</option>
+          <option value="1800">30 minutes</option>
+          <option value="3600">1 hour</option>
+        </select>
+      </div>
+      <div style="margin-bottom:8px">
         <label style="font-size:9px;letter-spacing:1px">Auto-refresh</label>
         <select id="interval-sel" onchange="setInterval_s(this)" style="width:100%;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;color:var(--text);font-size:11px;font-family:'Helvetica Neue',Arial,sans-serif;outline:none;margin-top:3px">
           <option value="60">Every 1 min</option>
@@ -546,6 +568,17 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
       document.getElementById('sec-' + link.dataset.sec).classList.add('on');
     });
   });
+
+  // ── Keepalive ──────────────────────────────────────────────────
+  window.setKeepalive = function (sel) {
+    fetch('/api/keepalive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keepalive: parseInt(sel.value, 10) })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.ok) toast('WiFi keep-alive: ' + d.keepalive + 's', 'ok');
+    }).catch(function () { toast('Failed to set keepalive', 'err'); });
+  };
 
   // ── Interval ───────────────────────────────────────────────────
   window.setInterval_s = function (sel) {
@@ -852,6 +885,15 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
     for (var i = 0; i < intSel.options.length; i++) {
       if (parseInt(intSel.options[i].value, 10) === state.interval) {
         intSel.selectedIndex = i; break;
+      }
+    }
+  }
+  // Init keepalive selector from loaded data
+  var kaSel = document.getElementById('keepalive-sel');
+  if (state.keepalive !== undefined) {
+    for (var i = 0; i < kaSel.options.length; i++) {
+      if (parseInt(kaSel.options[i].value, 10) === state.keepalive) {
+        kaSel.selectedIndex = i; break;
       }
     }
   }

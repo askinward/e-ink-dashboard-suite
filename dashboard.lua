@@ -23,6 +23,8 @@ local keepWiFiOn = false
 local lastToken = -1
 local wifiWasUp = false
 local sshKeepalive = false
+local wifiKeepAliveTicks = 0
+local wifiOffCounter = 0
 
 -- Helpers
 local function log(msg)
@@ -205,6 +207,14 @@ local function checkServer()
         sshKeepalive = (ssh == "true")
     end
 
+    local _, _, ka = raw:match('"keepalive":(%d+)')
+    if ka then
+        local n = tonumber(ka)
+        if n and n >= 0 then
+            wifiKeepAliveTicks = math.max(0, math.floor(n / CLOCK_TICK))
+        end
+    end
+
     return shouldRedraw
 end
 
@@ -268,6 +278,7 @@ while true do
         needsData = true
         showStatus("Refreshing...")
         log("Touch refresh at " .. (tapX or -1) .. "," .. (tapY or -1))
+        wifiOffCounter = wifiKeepAliveTicks  -- postpone WiFi shutdown on activity
     end
 
     local sf = io.open(SIGNAL_FILE, "r")
@@ -302,7 +313,20 @@ while true do
             log("needsData: wifiOn failed, skipping refresh")
         end
         if not keepWiFiOn and not sshKeepalive then
-            wifiOff()
+            if wifiKeepAliveTicks > 0 then
+                wifiOffCounter = wifiKeepAliveTicks
+            else
+                wifiOff()
+            end
+        end
+    else
+        -- No needsData this cycle — countdown to WiFi shutdown
+        if wifiOffCounter > 0 then
+            wifiOffCounter = wifiOffCounter - 1
+            if wifiOffCounter <= 0 then
+                log("WiFi keepalive expired, shutting down")
+                wifiOff()
+            end
         end
     end
 
