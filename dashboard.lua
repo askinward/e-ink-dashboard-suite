@@ -228,11 +228,26 @@ os.execute("rm -f " .. SIGNAL_FILE)
 -- Main loop
 local cycle = 0
 local tickCount = 0
+local lastLoopTime = os.time()
 
 ttf(F.sans, 12, 0, 0, "EXIT ←")
 
 while true do
     local touched, tapX, tapY = waitForTouch(CLOCK_TICK)
+
+    -- Detect sleep/wake: if more than tick+10s elapsed, device was asleep
+    local now = os.time()
+    local elapsed = now - lastLoopTime
+    lastLoopTime = now
+    if elapsed > CLOCK_TICK + 10 then
+        log("Wake from sleep (+" .. elapsed .. "s gap)")
+        showStatus("Waking up...")
+        fb("-s -f -q")
+        ttf(F.serif, 64, 0, 4, os.date("%H:%M"))
+        ttf(F.sans, 12, 0, 0, "EXIT ←")
+        wifiWasUp = false  -- WiFi was reset during sleep, force indicator clear
+        os.execute("sleep 2")
+    end
 
     cycle = cycle + 1
     tickCount = tickCount + 1
