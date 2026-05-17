@@ -94,6 +94,7 @@ local function drawDashboard()
     end
     os.execute('cat /tmp/dashboard.raw > /dev/fb0 2>/dev/null')
     os.execute(FBINK .. " -s -f -q")
+    ttf(F.sans, 12, 0, 0, "EXIT ←")
     local now = os.date("*t")
     local clock = string.format("%02d:%02d", now.hour, now.min)
     ttf(F.serif, 64, 0, 4, clock)
@@ -113,7 +114,8 @@ local function parseInputEvent(data, off)
     return typ, code, value
 end
 
--- Wait up to timeout_sec for a touch. Returns true if tap detected.
+-- Wait up to timeout_sec for a touch. Returns touched, x, y.
+local EXIT_ZONE = 60  -- pixels from top-left corner for exit tap
 local function waitForTouch(timeout_sec)
     local found = false
     for idx, dev in ipairs(TOUCH_DEVICES) do
@@ -129,10 +131,14 @@ local function waitForTouch(timeout_sec)
                 ef:close()
                 os.execute("rm -f /tmp/touch-ev")
                 if data and #data >= 16 then
+                    local tapX, tapY = -1, -1
                     for off = 0, #data - 16, 16 do
                         local typ, code, value = parseInputEvent(data, off)
-                        if typ == 1 and code == 330 and value == 1 then
-                            return true
+                        if typ == 3 then
+                            if code == 0 then tapX = value
+                            elseif code == 1 then tapY = value end
+                        elseif typ == 1 and code == 330 and value == 1 then
+                            return true, tapX, tapY
                         end
                     end
                 end
@@ -142,7 +148,7 @@ local function waitForTouch(timeout_sec)
     if not found then
         os.execute("sleep " .. timeout_sec)
     end
-    return false
+    return false, -1, -1
 end
 
 -- Poll server. Returns true if Kobo should redraw.
@@ -210,19 +216,30 @@ os.execute("rm -f " .. SIGNAL_FILE)
 local cycle = 0
 local tickCount = 0
 
+ttf(F.sans, 12, 0, 0, "EXIT ←")
+
 while true do
-    local touched = waitForTouch(CLOCK_TICK)
+    local touched, tapX, tapY = waitForTouch(CLOCK_TICK)
 
     cycle = cycle + 1
     tickCount = tickCount + 1
     killKOReader()
+
+    if touched and tapX >= 0 and tapX < EXIT_ZONE and tapY >= 0 and tapY < EXIT_ZONE then
+        log("Exit tap at " .. tapX .. "," .. tapY)
+        showStatus("Exiting to Nickel...")
+        os.execute("/usr/local/Kobo/hindenburg &")
+        os.execute("rm -f " .. SIGNAL_FILE)
+        os.execute("rm -f /tmp/touch-ev")
+        break
+    end
 
     local needsData = false
 
     if touched then
         needsData = true
         showStatus("Refreshing...")
-        log("Touch refresh")
+        log("Touch refresh at " .. (tapX or -1) .. "," .. (tapY or -1))
     end
 
     local sf = io.open(SIGNAL_FILE, "r")
