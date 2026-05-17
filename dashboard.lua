@@ -221,17 +221,23 @@ while true do
     if tickCount * CLOCK_TICK >= refreshInterval then
         needsData = true
         tickCount = 0
-        log("Data refreshed")
+        log("Scheduled refresh (interval=" .. refreshInterval .. "s)")
     end
 
     if needsData then
         if not wifiIsUp() then
+            log("WiFi was down, reconnecting")
             showStatus("WiFi connecting...")
             wifiOn()
         end
         local shouldRedraw = checkServer()
         if shouldRedraw or touched then
             drawDashboard()
+        else
+            -- Redraw clock to clear any status message
+            local now = os.date("*t")
+            local clock = string.format("%02d:%02d", now.hour, now.min)
+            ttf(F.serif, 64, 0, 4, clock)
         end
         if not keepWiFiOn then
             wifiOff()
