@@ -67,7 +67,15 @@ end
 local function wifiOn()
     os.execute("ifconfig eth0 up 2>/dev/null")
     os.execute("dhcpcd eth0 2>/dev/null &")
-    os.execute("sleep 2")
+    for i = 1, 15 do
+        os.execute("sleep 1")
+        if wifiIsUp() then
+            log("WiFi got IP after " .. i .. "s")
+            return true
+        end
+    end
+    log("WiFi failed to get IP after 15s")
+    return false
 end
 
 local function wifiOff()
@@ -82,16 +90,21 @@ local function wifiIsUp()
     return n > 0
 end
 
--- Draw full dashboard from server
+-- Draw full dashboard from server (caller must ensure WiFi is up)
 local function drawDashboard()
-    if not wifiIsUp() then wifiOn() end
     showStatus("Downloading...")
-    local ok = os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 15 2>/dev/null')
+    os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 15 2>/tmp/wget_err.log')
+    local ok = os.execute('test -s /tmp/dashboard.raw')
     if ok ~= 0 then
-        log("Failed to download dashboard.raw")
+        local ef = io.open("/tmp/wget_err.log", "r")
+        local err = (ef and ef:read("*a")) or "unknown"
+        if ef then ef:close() end
+        log("Download failed: " .. err:gsub("\n", " "))
         showStatus("Download failed")
+        os.execute("rm -f /tmp/wget_err.log /tmp/dashboard.raw")
         return false
     end
+    os.execute("rm -f /tmp/wget_err.log")
     os.execute('cat /tmp/dashboard.raw > /dev/fb0 2>/dev/null')
     os.execute(FBINK .. " -s -f -q")
     ttf(F.sans, 12, 0, 0, "EXIT ←")
@@ -152,9 +165,8 @@ local function waitForTouch(timeout_sec)
 end
 
 -- Poll server. Returns true if Kobo should redraw.
--- Always reads wifi flag and interval from response (no early return).
+-- Caller must ensure WiFi is up before calling.
 local function checkServer()
-    if not wifiIsUp() then wifiOn() end
     showStatus("Checking server...")
     local f = io.popen('wget -q -O - -T 10 "' .. SERVER_URL .. '/api/poll" 2>/dev/null', "r")
     if not f then return false end
@@ -208,6 +220,7 @@ end
 -- Startup
 killKOReader()
 log("Dashboard starting")
+if not wifiIsUp() then wifiOn() end
 drawDashboard()
 log("Dashboard drawn")
 os.execute("rm -f " .. SIGNAL_FILE)
@@ -258,14 +271,20 @@ while true do
     end
 
     if needsData then
+        local wifiOk = true
         if not wifiIsUp() then
             log("WiFi was down, reconnecting")
             showStatus("WiFi connecting...")
-            wifiOn()
+            wifiOk = wifiOn()
         end
-        local shouldRedraw = checkServer()
-        if shouldRedraw or touched then
-            drawDashboard()
+        if wifiOk then
+            local shouldRedraw = checkServer()
+            if shouldRedraw or touched then
+                drawDashboard()
+            end
+        else
+            showStatus("WiFi failed")
+            log("needsData: wifiOn failed, skipping refresh")
         end
         if not keepWiFiOn and not sshKeepalive then
             wifiOff()

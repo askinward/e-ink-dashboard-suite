@@ -209,7 +209,8 @@ app.post('/api/wifi/:state', (req, res) => {
 app.post('/api/ssh/:state', (req, res) => {
   const d = load();
   d.sshenabled = req.params.state === 'on';
-  res.json(save(d));
+  save(d);
+  res.json({ ok: true, ssh: d.sshenabled });
 });
 
 app.post('/api/interval', (req, res) => {
