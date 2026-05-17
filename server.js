@@ -40,6 +40,7 @@ const DEFAULTS = {
   ],
   background: null,
   interval: 300,
+  sshenabled: true,
   updated_at: new Date().toISOString()
 };
 
@@ -196,12 +197,19 @@ app.post('/api/refresh', (_req, res) => {
 app.get('/api/poll', (_req, res) => {
   const d = load();
   const interval = (d.interval && d.interval >= 60) ? d.interval : 300;
-  res.json({ t: refreshToken, wifi: wifiEnabled, interval });
+  const ssh = d.sshenabled === true;
+  res.json({ t: refreshToken, wifi: wifiEnabled, interval, ssh });
 });
 
 app.post('/api/wifi/:state', (req, res) => {
   wifiEnabled = req.params.state === 'on';
   res.json({ ok: true, wifi: wifiEnabled });
+});
+
+app.post('/api/ssh/:state', (req, res) => {
+  const d = load();
+  d.sshenabled = req.params.state === 'on';
+  res.json(save(d));
 });
 
 app.post('/api/interval', (req, res) => {
@@ -421,9 +429,12 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
       </a>
     </div>
     <div class="sidebar-foot">
-      <div style="display:flex;gap:6px;margin-bottom:8px">
+      <div style="display:flex;gap:6px;margin-bottom:4px">
         <button class="btn btn-pri" onclick="triggerRefresh()" style="flex:1;padding:8px 0;font-size:11px">⟳ Refresh</button>
         <button class="btn" id="wifi-btn" onclick="toggleWifi()" style="flex:1;padding:8px 0;font-size:11px">WiFi ◉</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button class="btn" id="ssh-btn" onclick="toggleSsh()" style="flex:1;padding:8px 0;font-size:11px;opacity:0.6">SSH ◉</button>
       </div>
       <div style="margin-bottom:8px">
         <label style="font-size:9px;letter-spacing:1px">Auto-refresh</label>
@@ -574,6 +585,27 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
   // Init WiFi button
   fetch('/api/poll').then(function (r) { return r.json(); }).then(function (p) {
     document.getElementById('wifi-btn').textContent = p.wifi ? 'WiFi ◉' : 'WiFi ⊙';
+  });
+
+  // ── SSH ────────────────────────────────────────────────────────
+  window.toggleSsh = function () {
+    fetch('/api/poll').then(function (r) { return r.json(); }).then(function (p) {
+      var nextState = p.ssh ? 'off' : 'on';
+      fetch('/api/ssh/' + nextState, { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) {
+            document.getElementById('ssh-btn').textContent = d.ssh ? 'SSH ◉' : 'SSH ⊙';
+            document.getElementById('ssh-btn').style.opacity = d.ssh ? '1' : '0.6';
+            toast('SSH keepalive ' + (d.ssh ? 'enabled' : 'disabled'), 'ok');
+          }
+        });
+    }).catch(function () { toast('Network error', 'err'); });
+  };
+  // Init SSH button
+  fetch('/api/poll').then(function (r) { return r.json(); }).then(function (p) {
+    document.getElementById('ssh-btn').textContent = p.ssh ? 'SSH ◉' : 'SSH ⊙';
+    document.getElementById('ssh-btn').style.opacity = p.ssh ? '1' : '0.6';
   });
 
   // ── Quote ──────────────────────────────────────────────────────

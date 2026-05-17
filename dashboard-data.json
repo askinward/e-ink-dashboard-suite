@@ -31,5 +31,6 @@
   ],
   "background": "/images/background.png",
   "updated_at": "2026-05-17T17:23:15.943Z",
-  "interval": 86400
+  "interval": 86400,
+  "sshenabled": true
 }

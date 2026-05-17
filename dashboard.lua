@@ -21,6 +21,8 @@ local CLOCK_TICK = 60
 local refreshInterval = 300
 local keepWiFiOn = false
 local lastToken = -1
+local wifiWasUp = false
+local sshKeepalive = false
 
 -- Helpers
 local function log(msg)
@@ -180,7 +182,21 @@ local function checkServer()
         end
     end
 
+    local _, _, ssh = raw:match('"ssh":(true|false)')
+    if ssh then
+        sshKeepalive = (ssh == "true")
+    end
+
     return shouldRedraw
+end
+
+-- Draw WiFi indicator symbol
+local function drawWifiIcon(up)
+    if up then
+        fb("-t regular=" .. F.sans .. ",size=14 -y 0 -X 90 \"\226\151\137\"")
+    else
+        fb("-c -p -x 88 -y 0 -w 12 -h 1")
+    end
 end
 
 -- Startup
@@ -233,18 +249,24 @@ while true do
         local shouldRedraw = checkServer()
         if shouldRedraw or touched then
             drawDashboard()
-        else
-            -- Redraw clock to clear any status message
-            local now = os.date("*t")
-            local clock = string.format("%02d:%02d", now.hour, now.min)
-            ttf(F.serif, 64, 0, 4, clock)
         end
-        if not keepWiFiOn then
+        if not keepWiFiOn and not sshKeepalive then
             wifiOff()
         end
-    else
-        local now = os.date("*t")
-        local clock = string.format("%02d:%02d", now.hour, now.min)
-        ttf(F.serif, 64, 0, 4, clock)
+    end
+
+    -- Clock (blinks colon on even minutes) and WiFi indicator
+    local now = os.date("*t")
+    local colon = (now.min % 2 == 0) and " " or ":"
+    local clock = string.format("%02d" .. colon .. "%02d", now.hour, now.min)
+    ttf(F.serif, 64, 0, 4, clock)
+
+    local wifiUp = wifiIsUp()
+    if wifiUp ~= wifiWasUp then
+        drawWifiIcon(wifiUp)
+        wifiWasUp = wifiUp
+    elseif not wifiUp and math.fmod(cycle, 15) == 0 then
+        -- Periodically re-clear indicator area in case of display artifacts
+        fb("-c -p -x 88 -y 0 -w 12 -h 1")
     end
 end
