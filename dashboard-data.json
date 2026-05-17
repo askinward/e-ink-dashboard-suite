@@ -1,0 +1,35 @@
+{
+  "quote": {
+    "text": "Nalladhe nadakku",
+    "author": "vijay"
+  },
+  "todos": [
+    {
+      "id": 1,
+      "text": "Review today's notes",
+      "done": true
+    },
+    {
+      "id": 200,
+      "text": "clean room",
+      "done": true
+    }
+  ],
+  "events": [
+    {
+      "id": 1,
+      "time": "09:00",
+      "title": "Morning standup",
+      "description": ""
+    },
+    {
+      "id": 2,
+      "time": "14:00",
+      "title": "Deep work block",
+      "description": "No interruptions"
+    }
+  ],
+  "background": "/images/background.png",
+  "updated_at": "2026-05-17T17:23:15.943Z",
+  "interval": 86400
+}

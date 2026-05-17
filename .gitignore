@@ -1,0 +1,6 @@
+node_modules/
+*.log
+/images/background.*
+/tmp/
+images/*.jpg
+images/*.png

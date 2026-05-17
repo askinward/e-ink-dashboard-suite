@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<!--
+  Kobo Mini E-Ink Dashboard
+  ═══════════════════════════════════════════════════════════════════
+  Place at: /mnt/onboard/.adds/dashboard/index.html
+  Cache at: /mnt/onboard/.adds/dashboard/cache/dashboard.json
+            /mnt/onboard/.adds/dashboard/cache/bg.png
+
+  Design: "The Broadsheet" — newspaper-inspired, high contrast, legible at 167ppi
+  ═══════════════════════════════════════════════════════════════════
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=596, height=794, initial-scale=1.0, user-scalable=no">
+<title>Dashboard</title>
+<style>
+
+/* ── Reset ─────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0; padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Canvas ─────────────────────────────────────────────────────
+   596 × 794 px device; KOReader status bar occupies the
+   bottom 20 px. We paint 774 px and let the 20 px sit beneath.
+   ─────────────────────────────────────────────────────────────── */
+html {
+  width: 596px;
+  height: 794px;
+  overflow: hidden;
+  background: #fff;
+}
+
+body {
+  width: 596px;
+  height: 774px;       /* visible area above status bar */
+  overflow: hidden;
+  background: #fff;
+  color: #000;
+  /* Serif body — readable on e-ink */
+  font-family: Georgia, 'Times New Roman', Times, serif;
+  position: relative;
+}
+
+/* ── Master layout (column) ─────────────────────────────────── */
+.page {
+  display: flex;
+  flex-direction: column;
+  width: 596px;
+  height: 774px;
+}
+
+/* ═══ HEADER ═══ */
+/* Masthead row: day-name / date on left, thin rule at bottom */
+.zone-masthead {
+  flex-shrink: 0;
+  padding: 16px 40px 10px;
+  border-bottom: 2px solid #000;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.masthead-day {
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: #000;
+}
+
+.masthead-date {
+  font-family: Georgia, serif;
+  font-size: 12px;
+  color: #555;
+  letter-spacing: 0.5px;
+}
+
+/* ═══ TIME ════ */
+.zone-time {
+  flex-shrink: 0;
+  padding: 6px 40px 8px;
+  text-align: center;
+  border-bottom: 1px solid #000;
+  position: relative;
+}
+
+/* Large centrepiece clock */
+.clock-display {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 92px;
+  font-weight: 400;
+  letter-spacing: -4px;
+  line-height: 1;
+  color: #000;
+}
+
+/* Three secondary timezones */
+.tz-strip {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  margin-top: 6px;
+}
+
+.tz-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 22px;
+  border-right: 1px solid #ccc;
+}
+.tz-cell:last-child { border-right: none; }
+
+.tz-name {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 8px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 1px;
+}
+
+.tz-time {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 15px;
+  color: #000;
+  letter-spacing: 0;
+}
+
+/* ═══ RULES ═══ */
+.rule        { height: 1px; background: #000; margin: 0 28px; flex-shrink: 0; }
+.rule-light  { height: 1px; background: #ccc; margin: 0 28px; flex-shrink: 0; }
+
+/* ═══ SECTION LABEL ═══ */
+.zone-label {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 7px;
+  letter-spacing: 3.5px;
+  text-transform: uppercase;
+  color: #999;
+  margin-bottom: 7px;
+}
+
+/* ═══ EVENTS ═══ */
+.zone-events {
+  flex-shrink: 0;
+  padding: 9px 40px 9px;
+  max-height: 98px;
+  overflow: hidden;
+}
+
+.event-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 4px;
+  line-height: 1.35;
+}
+.event-row:last-child { margin-bottom: 0; }
+
+.ev-time {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+  width: 38px;
+}
+
+.ev-bullet {
+  font-size: 7px;
+  color: #000;
+  flex-shrink: 0;
+  position: relative;
+  top: -1px;
+}
+
+.ev-title {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  color: #000;
+  font-weight: 400;
+  flex: 1;
+}
+
+/* ═══ TODOS ═══ */
+.zone-todos {
+  flex-shrink: 0;
+  padding: 9px 40px 9px;
+  max-height: 98px;
+  overflow: hidden;
+}
+
+.todo-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+  line-height: 1.35;
+}
+.todo-row:last-child { margin-bottom: 0; }
+
+.todo-mark {
+  font-family: Georgia, serif;
+  font-size: 11px;
+  color: #444;
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.todo-text {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  color: #000;
+  flex: 1;
+}
+.todo-text.done {
+  text-decoration: line-through;
+  color: #aaa;
+}
+
+/* ═══ BACKGROUND IMAGE ═══ */
+.zone-image {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  background: #ebebeb;
+  min-height: 80px;
+}
+
+.zone-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* Force grayscale on device (server should pre-process, but belt and suspenders) */
+  filter: grayscale(100%);
+}
+
+/* Hatched placeholder when no image is set */
+.img-placeholder {
+  width: 100%;
+  height: 100%;
+  background-image: repeating-linear-gradient(
+    -55deg,
+    #e8e8e8,
+    #e8e8e8 1px,
+    #f3f3f3 1px,
+    #f3f3f3 12px
+  );
+}
+
+/* ═══ QUOTE ═══ */
+.zone-quote {
+  flex-shrink: 0;
+  background: #000;
+  color: #fff;
+  padding: 11px 44px 12px;
+  text-align: center;
+  /* Give a little breathing room from KOReader's status bar overlay */
+  padding-bottom: 14px;
+}
+
+.quote-text {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #e0e0e0;
+}
+
+.quote-author {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 8px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: #777;
+  margin-top: 5px;
+}
+
+/* ═══ EMPTY HINTS ═══ */
+.hint {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 11px;
+  color: #ccc;
+  font-style: italic;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   CORNER TAP ZONES
+   70×70 px invisible hit areas in each corner.
+   A faint 3 px dot marks each corner for discoverability.
+   Corners sit fixed so they're always on top of content.
+   ════════════════════════════════════════════════════════════════ */
+.corner {
+  position: fixed;
+  width: 70px;
+  height: 70px;
+  z-index: 30;
+  cursor: pointer;
+}
+
+.corner-tl { top: 0;   left: 0;  }
+.corner-tr { top: 0;   right: 0; }
+.corner-bl { bottom: 20px; left: 0;  }   /* sits above status bar */
+.corner-br { bottom: 20px; right: 0; }
+
+/* Indicator dot — very subtle, shows there's a tap zone here */
+.c-dot {
+  position: absolute;
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: #ccc;
+}
+.corner-tl .c-dot { bottom: 9px; right: 9px; }
+.corner-tr .c-dot { bottom: 9px; left:  9px; }
+.corner-bl .c-dot { top:    9px; right: 9px; }
+.corner-br .c-dot { top:    9px; left:  9px; }
+
+/* ════════════════════════════════════════════════════════════════
+   STANDALONE MODE BADGE
+   Small pill at top-centre when sync is suspended.
+   ════════════════════════════════════════════════════════════════ */
+.standalone-pill {
+  display: none;
+  position: fixed;
+  top: 0; left: 50%;
+  transform: translateX(-50%);
+  background: #000;
+  color: #fff;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 7px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  padding: 3px 10px 4px;
+  z-index: 25;
+}
+.standalone-pill.show { display: block; }
+
+/* ════════════════════════════════════════════════════════════════
+   OVERLAY + POPUP SYSTEM
+   Dark scrim + centered popup card.
+   No animations — e-ink redraws are handled by KOReader.
+   ════════════════════════════════════════════════════════════════ */
+.scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 50;
+  align-items: center;
+  justify-content: center;
+}
+.scrim.show { display: flex; }
+
+/* Popup card */
+.popup {
+  background: #fff;
+  border: 2px solid #000;
+  width: 310px;
+}
+
+.popup-hd {
+  padding: 13px 20px 11px;
+  border-bottom: 1px solid #000;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #000;
+}
+
+.popup-bd {
+  padding: 16px 20px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  color: #000;
+  line-height: 1.6;
+}
+
+.popup-ft {
+  padding: 10px 20px 14px;
+  border-top: 1px solid #eee;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Popup buttons */
+.pb {
+  padding: 7px 18px;
+  font-size: 12px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: 0.3px;
+  border: 1.5px solid #000;
+  background: #fff;
+  color: #000;
+  cursor: pointer;
+}
+.pb-fill { background: #000; color: #fff; }
+
+/* Connectivity rows inside popup */
+.conn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid #eee;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  color: #000;
+}
+.conn-row:last-of-type { border-bottom: none; }
+
+.conn-lbl {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* Status indicator dot */
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid #000;
+  background: transparent;
+  flex-shrink: 0;
+}
+.status-dot.on { background: #000; }
+
+.conn-meta {
+  margin-top: 13px;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  color: #888;
+  line-height: 1.6;
+}
+
+/* Sync status note inside refresh popup */
+.sync-note {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 11px;
+  color: #888;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+</style>
+</head>
+<body>
+
+<!-- Standalone mode indicator -->
+<div class="standalone-pill" id="standalone-pill">Standalone</div>
+
+<!-- ════ Corner tap zones ════ -->
+<div class="corner corner-tl" onclick="openPopup('sync')">    <div class="c-dot"></div></div>
+<div class="corner corner-tr" onclick="openPopup('exit')">    <div class="c-dot"></div></div>
+<div class="corner corner-bl" onclick="openPopup('connect')"> <div class="c-dot"></div></div>
+<div class="corner corner-br" onclick="openPopup('mode')">    <div class="c-dot"></div></div>
+
+<!-- ════ Page ════ -->
+<div class="page">
+
+  <!-- Masthead: day name + date -->
+  <div class="zone-masthead">
+    <div class="masthead-day"  id="day-name">—</div>
+    <div class="masthead-date" id="full-date">—</div>
+  </div>
+
+  <!-- Time: primary clock + 3 timezones -->
+  <div class="zone-time">
+    <div class="clock-display" id="clock">00:00</div>
+    <div class="tz-strip">
+      <div class="tz-cell">
+        <div class="tz-name">ET</div>
+        <div class="tz-time" id="tz-et">—</div>
+      </div>
+      <div class="tz-cell">
+        <div class="tz-name">PT</div>
+        <div class="tz-time" id="tz-pt">—</div>
+      </div>
+      <div class="tz-cell">
+        <div class="tz-name">IST</div>
+        <div class="tz-time" id="tz-ist">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rule"></div>
+
+  <!-- Events -->
+  <div class="zone-events">
+    <div class="zone-label">Today</div>
+    <div id="events-out"></div>
+  </div>
+
+  <div class="rule-light"></div>
+
+  <!-- Todos -->
+  <div class="zone-todos">
+    <div class="zone-label">Tasks</div>
+    <div id="todos-out"></div>
+  </div>
+
+  <div class="rule"></div>
+
+  <!-- Background image -->
+  <div class="zone-image">
+    <img id="bg-img" src="" alt="" style="display:none">
+    <div id="img-placeholder" class="img-placeholder"></div>
+  </div>
+
+  <!-- Quote strip -->
+  <div class="zone-quote">
+    <div class="quote-text"   id="quote-text"></div>
+    <div class="quote-author" id="quote-author"></div>
+  </div>
+
+</div><!-- .page -->
+
+
+<!-- ════════════════════════════════════════════════════════════════
+     POPUPS
+     Each corner opens one popup. Popups send signals to the Lua
+     plugin via koreader:// URL navigation (see lua() function).
+     ════════════════════════════════════════════════════════════════ -->
+
+<!-- TL → Sync now -->
+<div class="scrim" id="scrim-sync">
+  <div class="popup">
+    <div class="popup-hd">Sync</div>
+    <div class="popup-bd">
+      Fetch the latest data from your home server?
+      <div class="sync-note" id="last-sync-label"></div>
+      <div class="sync-note" id="sync-status"></div>
+    </div>
+    <div class="popup-ft">
+      <button class="pb" onclick="closePopup('sync')">Cancel</button>
+      <button class="pb pb-fill" onclick="doSync()">Sync Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- TR → Exit -->
+<div class="scrim" id="scrim-exit">
+  <div class="popup">
+    <div class="popup-hd">Exit</div>
+    <div class="popup-bd">Return to KOReader file manager?</div>
+    <div class="popup-ft">
+      <button class="pb" onclick="closePopup('exit')">Cancel</button>
+      <button class="pb pb-fill" onclick="doExit()">Exit</button>
+    </div>
+  </div>
+</div>
+
+<!-- BL → Connectivity (Wi-Fi + SSH) -->
+<div class="scrim" id="scrim-connect">
+  <div class="popup">
+    <div class="popup-hd">Connectivity</div>
+    <div class="popup-bd">
+      <div class="conn-row">
+        <div class="conn-lbl">
+          <div class="status-dot" id="wifi-dot"></div>
+          Wi-Fi
+        </div>
+        <button class="pb" id="wifi-btn" onclick="toggleWifi()" style="padding:5px 14px;font-size:11px">—</button>
+      </div>
+      <div class="conn-row">
+        <div class="conn-lbl">
+          <div class="status-dot" id="ssh-dot"></div>
+          SSH
+        </div>
+        <button class="pb" id="ssh-btn" onclick="toggleSsh()" style="padding:5px 14px;font-size:11px">—</button>
+      </div>
+      <div class="conn-meta" id="ssh-meta">SSH: root@[device-ip] port 2222</div>
+    </div>
+    <div class="popup-ft">
+      <button class="pb pb-fill" onclick="closePopup('connect')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- BR → Standalone mode -->
+<div class="scrim" id="scrim-mode">
+  <div class="popup">
+    <div class="popup-hd">Standalone Mode</div>
+    <div class="popup-bd" id="mode-body">
+      Suspend all syncing and disable Wi-Fi for extended offline use.
+      The local clock continues to update. Ideal for conserving battery on long trips.
+    </div>
+    <div class="popup-ft">
+      <button class="pb" onclick="closePopup('mode')">Cancel</button>
+      <button class="pb pb-fill" id="mode-btn" onclick="toggleMode()">—</button>
+    </div>
+  </div>
+</div>
+
+
+<script>
+// ════════════════════════════════════════════════════════════════════
+//  Dashboard JS
+//  Responsibilities:
+//    • Load cached JSON and render data sections
+//    • Maintain local clock (minute-aligned, not per-second)
+//    • Compute secondary timezones via Intl API (auto-DST)
+//    • Drive corner popups
+//    • Signal Lua plugin via koreader:// URL scheme
+// ════════════════════════════════════════════════════════════════════
+
+var S = {
+  standalone: false,
+  wifiOn:     false,
+  sshOn:      false,
+  lastSync:   null,
+};
+
+var DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+// ── Boot ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function () {
+  loadCached();
+  startClock();
+});
+
+// ── Data ──────────────────────────────────────────────────────────
+function loadCached() {
+  // Relative path resolves to .../dashboard/cache/dashboard.json
+  fetch('./cache/dashboard.json')
+    .then(function (r) {
+      if (!r.ok) throw new Error('no cache');
+      return r.json();
+    })
+    .then(function (d) {
+      S.lastSync = d.updated_at || null;
+      renderAll(d);
+    })
+    .catch(function () {
+      renderAll(null);
+    });
+}
+
+function renderAll(d) {
+  renderEvents(d);
+  renderTodos(d);
+  renderQuote(d);
+  renderBg(d);
+}
+
+function renderEvents(d) {
+  var el = document.getElementById('events-out');
+  if (!d || !d.events || !d.events.length) {
+    el.innerHTML = '<div class="hint">No events today</div>';
+    return;
+  }
+  var html = '';
+  var shown = 0;
+  for (var i = 0; i < d.events.length && shown < 4; i++) {
+    var e = d.events[i];
+    html += '<div class="event-row">';
+    html += '<span class="ev-time">' + esc(e.time || '') + '</span>';
+    html += '<span class="ev-bullet">◆</span>';
+    html += '<span class="ev-title">' + esc(e.title || '') + '</span>';
+    html += '</div>';
+    shown++;
+  }
+  el.innerHTML = html;
+}
+
+function renderTodos(d) {
+  var el = document.getElementById('todos-out');
+  if (!d || !d.todos || !d.todos.length) {
+    el.innerHTML = '<div class="hint">No tasks</div>';
+    return;
+  }
+  var html = '';
+  var shown = 0;
+  for (var i = 0; i < d.todos.length && shown < 4; i++) {
+    var t = d.todos[i];
+    html += '<div class="todo-row">';
+    html += '<span class="todo-mark">' + (t.done ? '✓' : '○') + '</span>';
+    html += '<span class="todo-text' + (t.done ? ' done' : '') + '">' + esc(t.text || '') + '</span>';
+    html += '</div>';
+    shown++;
+  }
+  el.innerHTML = html;
+}
+
+function renderQuote(d) {
+  if (!d || !d.quote) return;
+  var qt = document.getElementById('quote-text');
+  var qa = document.getElementById('quote-author');
+  qt.textContent = d.quote.text ? '\u201c' + d.quote.text + '\u201d' : '';
+  qa.textContent = d.quote.author ? '\u2014 ' + d.quote.author : '';
+}
+
+function renderBg(d) {
+  if (!d || !d.background) return;
+  var img = document.getElementById('bg-img');
+  img.src = './cache/bg.png';
+  img.onload = function () {
+    img.style.display = 'block';
+    document.getElementById('img-placeholder').style.display = 'none';
+  };
+  img.onerror = function () {
+    img.style.display = 'none';
+    document.getElementById('img-placeholder').style.display = 'block';
+  };
+}
+
+// ── Clock ─────────────────────────────────────────────────────────
+// Only updates once per minute, aligned to the actual minute boundary.
+// Secondary timezones use Intl.DateTimeFormat — handles DST automatically.
+
+function tick() {
+  var now = new Date();
+
+  // Day and date
+  document.getElementById('day-name').textContent  = DAYS[now.getDay()].toUpperCase();
+  document.getElementById('full-date').textContent =
+    MONTHS[now.getMonth()] + ' ' + now.getDate() + ', ' + now.getFullYear();
+
+  // Primary clock
+  var hh = ('0' + now.getHours()).slice(-2);
+  var mm = ('0' + now.getMinutes()).slice(-2);
+  document.getElementById('clock').textContent = hh + ':' + mm;
+
+  // Secondary timezones
+  try {
+    var fmt = function (tz) {
+      return new Intl.DateTimeFormat('en-GB', {
+        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz
+      }).format(now);
+    };
+    document.getElementById('tz-et').textContent  = fmt('America/New_York');
+    document.getElementById('tz-pt').textContent  = fmt('America/Los_Angeles');
+    document.getElementById('tz-ist').textContent = fmt('Asia/Kolkata');
+  } catch (e) {
+    // Intl not supported — leave dashes
+  }
+}
+
+function startClock() {
+  tick(); // immediate first paint
+  var now   = new Date();
+  var delay = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+  setTimeout(function () {
+    tick();
+    setInterval(tick, 60000);
+  }, delay);
+}
+
+// ── Popups ────────────────────────────────────────────────────────
+function openPopup(name) {
+  if (name === 'sync')    prepareSyncPopup();
+  if (name === 'connect') prepareConnectPopup();
+  if (name === 'mode')    prepareModePopup();
+  document.getElementById('scrim-' + name).classList.add('show');
+}
+
+function closePopup(name) {
+  document.getElementById('scrim-' + name).classList.remove('show');
+}
+
+// Sync popup
+function prepareSyncPopup() {
+  var lbl = document.getElementById('last-sync-label');
+  lbl.textContent = S.lastSync
+    ? 'Last sync: ' + new Date(S.lastSync).toLocaleString()
+    : 'Not yet synced from server.';
+  document.getElementById('sync-status').textContent = '';
+}
+
+function doSync() {
+  var status = document.getElementById('sync-status');
+  status.textContent = 'Requesting sync\u2026';
+  lua('refresh');
+  // Optimistic local reload (works when served from server)
+  setTimeout(function () {
+    fetch('./cache/dashboard.json?t=' + Date.now())
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        S.lastSync = new Date().toISOString();
+        renderAll(d);
+        status.textContent = 'Done.';
+        setTimeout(function () { closePopup('sync'); }, 900);
+      })
+      .catch(function () {
+        status.textContent = 'No server reply \u2014 using cached data.';
+      });
+  }, 500);
+}
+
+// Exit popup
+function doExit() {
+  lua('exit');
+  closePopup('exit');
+}
+
+// Connectivity popup
+function prepareConnectPopup() {
+  setDot('wifi-dot', S.wifiOn);
+  setDot('ssh-dot',  S.sshOn);
+  document.getElementById('wifi-btn').textContent = S.wifiOn ? 'Disable' : 'Enable';
+  document.getElementById('ssh-btn').textContent  = S.sshOn  ? 'Disable' : 'Enable';
+}
+
+function setDot(id, on) {
+  var d = document.getElementById(id);
+  d.className = 'status-dot' + (on ? ' on' : '');
+}
+
+function toggleWifi() {
+  S.wifiOn = !S.wifiOn;
+  lua(S.wifiOn ? 'wifi-on' : 'wifi-off');
+  setDot('wifi-dot', S.wifiOn);
+  document.getElementById('wifi-btn').textContent = S.wifiOn ? 'Disable' : 'Enable';
+}
+
+function toggleSsh() {
+  S.sshOn = !S.sshOn;
+  lua(S.sshOn ? 'ssh-on' : 'ssh-off');
+  setDot('ssh-dot', S.sshOn);
+  document.getElementById('ssh-btn').textContent = S.sshOn ? 'Disable' : 'Enable';
+}
+
+// Standalone popup
+function prepareModePopup() {
+  var body = document.getElementById('mode-body');
+  var btn  = document.getElementById('mode-btn');
+  if (S.standalone) {
+    body.textContent = 'Standalone mode is active. Sync and Wi-Fi are suspended. Tap Disable to resume normal operation.';
+    btn.textContent  = 'Disable';
+  } else {
+    body.textContent = 'Suspend all syncing and disable Wi-Fi for extended offline use. The local clock continues to update.';
+    btn.textContent  = 'Enable';
+  }
+}
+
+function toggleMode() {
+  S.standalone = !S.standalone;
+  var pill = document.getElementById('standalone-pill');
+  if (S.standalone) pill.classList.add('show');
+  else              pill.classList.remove('show');
+  lua(S.standalone ? 'standalone-on' : 'standalone-off');
+  closePopup('mode');
+}
+
+// ── Lua bridge ────────────────────────────────────────────────────
+// Navigates a hidden iframe to koreader://action.
+// KOReader's WebView intercepts this in onNavigate / on_navigate.
+function lua(action) {
+  try {
+    var f  = document.createElement('iframe');
+    f.style.cssText = 'position:fixed;top:-9999px;width:0;height:0;border:none';
+    f.src = 'koreader://' + action;
+    document.body.appendChild(f);
+    setTimeout(function () {
+      if (f.parentNode) f.parentNode.removeChild(f);
+    }, 400);
+  } catch (e) { /* silent */ }
+}
+
+// ── Utility ───────────────────────────────────────────────────────
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
