@@ -30,8 +30,8 @@
     }
   ],
   "background": "/images/background.png",
-  "updated_at": "2026-05-17T17:23:15.943Z",
+  "updated_at": "2026-05-17T20:13:52.559Z",
   "interval": 86400,
   "sshenabled": true,
-  "keepalive": 0
+  "keepalive": 900
 }

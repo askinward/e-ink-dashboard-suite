@@ -67,7 +67,9 @@ end
 
 -- WiFi
 local function wifiOn()
+    os.execute("killall dhcpcd 2>/dev/null")
     os.execute("ifconfig eth0 up 2>/dev/null")
+    if wifiIsUp() then return true end
     os.execute("dhcpcd eth0 2>/dev/null &")
     for i = 1, 15 do
         os.execute("sleep 1")
@@ -242,7 +244,9 @@ local lastLoopTime = os.time()
 
 ttf(F.sans, 12, 0, 0, "EXIT ←")
 
-while true do
+local running = true
+while running do
+    local ok, err = pcall(function()
     local touched, tapX, tapY = waitForTouch(CLOCK_TICK)
 
     -- Detect sleep/wake: if more than tick+10s elapsed, device was asleep
@@ -269,7 +273,7 @@ while true do
         os.execute("/usr/local/Kobo/hindenburg &")
         os.execute("rm -f " .. SIGNAL_FILE)
         os.execute("rm -f /tmp/touch-ev")
-        break
+        running = false; return
     end
 
     local needsData = false
@@ -343,5 +347,11 @@ while true do
     elseif not wifiUp and math.fmod(cycle, 15) == 0 then
         -- Periodically re-clear indicator area in case of display artifacts
         fb("-c -p -x 88 -y 0 -w 12 -h 1")
+    end
+    end)  -- pcall
+    if not ok then
+        log("CRASH: " .. tostring(err))
+        showStatus("Error, restarting...")
+        os.execute("sleep 5")
     end
 end
