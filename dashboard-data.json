@@ -1,7 +1,7 @@
 {
   "quote": {
-    "text": "Nalladhe nadakku",
-    "author": "vijay"
+    "text": "helloooo",
+    "author": "ooo"
   },
   "todos": [
     {
@@ -29,9 +29,11 @@
       "description": "No interruptions"
     }
   ],
-  "background": "/images/background.png",
-  "updated_at": "2026-05-17T20:13:52.559Z",
+  "background": "/images/background.jpg",
+  "updated_at": "2026-05-18T21:06:59.395Z",
   "interval": 86400,
-  "sshenabled": true,
-  "keepalive": 900
+  "sshenabled": false,
+  "keepalive": -1,
+  "battery": 32,
+  "wifi_up": true
 }

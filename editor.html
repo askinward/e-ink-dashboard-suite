@@ -121,7 +121,7 @@ function resolveVars(text, data){
   const dateStr = (MONTHS[now.getMonth()+1]||'') + ' ' + now.getDate() + ', ' + now.getFullYear();
   const quote = data.quote || {};
   const subs = {
-    '{day_name}': dayName, '{date}': dateStr, '{battery}': '86%',
+    '{day_name}': dayName, '{date}': dateStr, '{battery}': (data.battery || 86) + '%',
     '{quote_text}': quote.text || '', '{quote_author}': quote.author || '',
     '{updated_at}': data.updated_at || '',
   };
@@ -363,18 +363,19 @@ function renderProps(){
   const labels = {
     font: 'Font', style: 'Style', size: 'Size', x: 'X', y: 'Y',
     color: 'Color', align: 'Align', text: 'Text', visible: 'Visible',
+    inverted: 'Inverted',
     wrap_width: 'Wrap W', line_height: 'Line H', max_items: 'Max',
     data_source: 'Source', item_template: 'Template', prefix: 'Prefix',
     width: 'Width', height: 'Height', empty_text: 'Empty Text',
   };
 
   let html = '';
-  const fields = ['text','font','style','size','x','y','color','align','wrap_width',
+  const fields = ['text','font','style','size','x','y','color','align','inverted','wrap_width',
                   'prefix','line_height','max_items','data_source','item_template',
                   'width','height','empty_text'];
   fields.forEach(f => {
-    if (el[f] === undefined && f !== 'visible') return;
-    if (el.type === 'clock_space' && ['text','font','style','color','align','wrap_width','prefix','line_height','max_items','data_source','item_template','empty_text'].includes(f)) return;
+    if (el[f] === undefined && f !== 'visible' && f !== 'inverted') return;
+    if (el.type === 'clock_space' && ['text','font','style','color','align','inverted','wrap_width','prefix','line_height','max_items','data_source','item_template','empty_text'].includes(f)) return;
     if (el.type !== 'clock_space' && ['width','height'].includes(f)) return;
     if (el.type !== 'list' && ['line_height','max_items','data_source','item_template','empty_text'].includes(f)) return;
     if (el.type !== 'text' && ['text','wrap_width','prefix','font'].includes(f) && el.type === 'list') return;
@@ -396,6 +397,8 @@ function renderProps(){
         ALIGN_NAMES.map(n => '<option'+(val===n?' selected':'')+'>'+n+'</option>').join('') + '</select></div>';
     } else if (f === 'visible'){
       html += '<div class="prop-row"><label>Visible</label><input type="checkbox" '+(val!==false?'checked':'')+' onchange="updateProp(\'visible\',this.checked)" style="width:18px;height:18px;flex:0"></div>';
+    } else if (f === 'inverted'){
+      html += '<div class="prop-row"><label>Inverted</label><input type="checkbox" '+(val?'checked':'')+' onchange="updateProp(\'inverted\',this.checked)" style="width:18px;height:18px;flex:0"></div>';
     } else if (typeof val === 'number' || ['x','y','size','wrap_width','line_height','max_items','width','height'].includes(f)){
       html += '<div class="prop-row"><label>'+label+'</label><input type="number" value="'+val+'" onchange="updateProp(\''+f+'\',parseFloat(this.value)||0)" class="'+(f==='wrap_width'?'wide':'')+'"></div>';
     } else if (f === 'text' || f === 'item_template' || f === 'empty_text' || f === 'prefix'){
@@ -428,7 +431,13 @@ window.updateProp = function(field, value){
   if (el) { el[field] = value; }
   renderElementList();
   renderPreview();
+  debounceSave();
 };
+
+function debounceSave(){
+  if (window._saveTimer) clearTimeout(window._saveTimer);
+  window._saveTimer = setTimeout(saveTemplate, 800);
+}
 
 function loadData(cb){
   fetch('/dashboard.json').then(r=>r.json()).then(d => { data = d; cb(); }).catch(() => { data = {events:[],todos:[],quote:{}}; cb(); });
@@ -440,11 +449,11 @@ function loadTemplate(cb){
   });
 }
 
-function refreshPreview(){
+window.refreshPreview = function(){
   loadData(() => renderPreview());
-}
+};
 
-function saveTemplate(){
+window.saveTemplate = function(){
   fetch('/api/template', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
@@ -453,16 +462,16 @@ function saveTemplate(){
     if (r.ok) { toast('Template saved','ok'); }
     else { toast('Save failed','err'); }
   }).catch(() => toast('Save failed','err'));
-}
+};
 
-function resetTemplate(){
+window.resetTemplate = function(){
   if (!confirm('Reset template to defaults?')) return;
   fetch('/api/template/reset', {method:'POST'}).then(r=>r.json()).then(t => {
     template = t; selectedId = null;
     renderElementList(); renderProps(); renderPreview();
     toast('Template reset','ok');
   }).catch(() => toast('Reset failed','err'));
-}
+};
 
 // Init
 loadData(() => {

@@ -67,7 +67,7 @@ def resolve_vars(text, data, now):
                    "July","August","September","October","November","December"]
     day_name = day_names[now.weekday()] if now else ""
     date_str = (month_names[now.month] + " " + str(now.day) + ", " + str(now.year)) if now else ""
-    battery = "86%"
+    battery = str(data.get("battery", 86)) + "%"
 
     subs = {
         "{day_name}": day_name,
@@ -76,6 +76,9 @@ def resolve_vars(text, data, now):
         "{quote_text}": (data.get("quote") or {}).get("text") or "",
         "{quote_author}": (data.get("quote") or {}).get("author") or "",
         "{updated_at}": (data.get("updated_at") or ""),
+        "{current_time}": now.strftime("%H:%M"),
+        "{wifi_indicator}": "W" if data.get("wifi_up") else "",
+        "{ssh_indicator}": "S" if data.get("sshenabled") else "",
     }
     for k, v in subs.items():
         text = text.replace(k, str(v))
@@ -172,9 +175,9 @@ def main():
         wrap_w = el.get("wrap_width", 0)
 
         if el_type == "clock_space":
-            w = el.get("width", 200)
-            h = el.get("height", 100)
-            draw.rectangle([wx, wy, wx + w, wy + h], fill=255)
+            # clock_space is a reserved area for the FBInk clock overlay on the Kobo.
+            # The server skips rendering it so the background shows through.
+            # FBInk on the Kobo draws the time text with its own white background.
             continue
 
         font = get_font(font_fam, font_sty, font_sz)
@@ -188,33 +191,39 @@ def main():
             if not text.strip():
                 continue
 
+            sw = 1
+            text_fill = 255 if el.get("inverted") else color
+            text_stroke = 0 if el.get("inverted") else 255
+
             if align == "right":
                 lines = text.split("\n")
                 for i, line in enumerate(lines):
                     bb = draw.textbbox((0, 0), line, font=font)
                     x = wx - (bb[2] - bb[0])
-                    draw.text((x, wy + i * (font_sz + 3)), line, font=font, fill=color)
+                    draw.text((x, wy + i * (font_sz + 3)), line, font=font, fill=text_fill, stroke_width=sw, stroke_fill=text_stroke)
             elif align == "center":
                 lines = text.split("\n")
                 for i, line in enumerate(lines):
                     bb = draw.textbbox((0, 0), line, font=font)
                     x = wx - (bb[2] - bb[0]) // 2
-                    draw.text((x, wy + i * (font_sz + 3)), line, font=font, fill=color)
+                    draw.text((x, wy + i * (font_sz + 3)), line, font=font, fill=text_fill, stroke_width=sw, stroke_fill=text_stroke)
             else:
                 if wrap_w > 0:
                     wrapped = wrap_text(text, font, wrap_w, draw)
                 else:
                     wrapped = text.split("\n")
                 for i, line in enumerate(wrapped):
-                    draw.text((wx, wy + i * (font_sz + 3)), line, font=font, fill=color)
+                    draw.text((wx, wy + i * (font_sz + 3)), line, font=font, fill=text_fill, stroke_width=sw, stroke_fill=text_stroke)
 
         elif el_type == "list":
             ds = el.get("data_source", "")
             items = data.get(ds, [])
+            lfill = 255 if el.get("inverted") else color
+            lstroke = 0 if el.get("inverted") else 255
             if not items:
                 empty_text = el.get("empty_text", "")
                 if empty_text:
-                    draw.text((wx, wy), empty_text, font=font, fill=color)
+                    draw.text((wx, wy), empty_text, font=font, fill=lfill, stroke_width=1, stroke_fill=lstroke)
                 continue
 
             template_str = el.get("item_template", "{text}")
@@ -233,7 +242,7 @@ def main():
                 if ds == "todos":
                     mark = "[x]" if item.get("done") else "[ ]"
                     line = line.replace("{mark}", mark)
-                draw.text((wx, cur_y), line, font=font, fill=color)
+                draw.text((wx, cur_y), line, font=font, fill=lfill, stroke_width=1, stroke_fill=lstroke)
                 cur_y += line_h
 
     # Output raw 608x800 8-bit grayscale

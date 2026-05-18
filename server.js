@@ -14,8 +14,33 @@ const os      = require('os');
 const { spawn } = require('child_process');
 
 const TEMPLATE_PATH = path.join(__dirname, 'template.json');
+const HEARTBEAT_PATH = path.join(__dirname, 'heartbeat.json');
 let refreshToken = 0;
 let wifiEnabled = true;
+let koboRemaining = 0;
+let koboLastHeartbeat = Date.now() - 120000; // default: 2min ago if no persisted data
+
+function loadHeartbeat() {
+  try {
+    const hb = JSON.parse(fs.readFileSync(HEARTBEAT_PATH, 'utf8'));
+    koboRemaining = hb.remaining || 0;
+    koboLastHeartbeat = hb.lastSeen || Date.now();
+    // Account for elapsed time since last heartbeat
+    const elapsed = Date.now() - koboLastHeartbeat;
+    koboRemaining = Math.max(0, koboRemaining - Math.floor(elapsed / 1000));
+  } catch { /* no persisted heartbeat — use defaults */ }
+}
+
+function saveHeartbeat(remaining) {
+  koboRemaining = remaining;
+  koboLastHeartbeat = Date.now();
+  fs.writeFileSync(HEARTBEAT_PATH, JSON.stringify({
+    remaining: koboRemaining,
+    lastSeen: koboLastHeartbeat
+  }));
+}
+
+loadHeartbeat();
 
 const app     = express();
 const PORT    = process.env.PORT || 5001;
@@ -80,6 +105,7 @@ const upload = multer({
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use('/images', express.static(IMG_DIR));
 
 // ── Routes — Kobo endpoints ──────────────────────────────────────────────────
@@ -97,10 +123,20 @@ app.get('/kobo.html', (req, res) => {
 // Pre-rendered raw framebuffer (608×800, 8-bit grayscale)
 app.get('/dashboard.raw', (req, res) => {
   const renderPy = path.join(__dirname, 'render_dashboard.py');
+  const outFile = path.join('/tmp', 'dashboard_' + Date.now() + '.raw');
   const render = spawn('python3', [renderPy], { stdio: ['ignore', 'pipe', 'pipe'] });
-  res.setHeader('Content-Type', 'application/octet-stream');
-  render.stdout.pipe(res);
+  const out = fs.createWriteStream(outFile);
+  render.stdout.pipe(out);
   render.stderr.on('data', d => process.stderr.write('[render] ' + d));
+  render.on('close', (code) => {
+    if (code === 0) {
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Length', 486400);
+      fs.createReadStream(outFile).pipe(res);
+    } else {
+      res.status(500).end();
+    }
+  });
   render.on('error', () => { if (!res.headersSent) res.status(500).end(); });
 });
 
@@ -131,6 +167,7 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
   const d   = load();
   d.background = url;
   save(d);
+  refreshToken++;
   res.json({ ok: true, url });
 });
 
@@ -144,6 +181,7 @@ app.delete('/api/background', (_req, res) => {
     }
   }
   save(d);
+  refreshToken++;
   res.json({ ok: true });
 });
 
@@ -174,11 +212,13 @@ app.post('/api/template', (req, res) => {
   const t = req.body;
   if (!t || !t.elements) return res.status(400).json({ error: 'Invalid template' });
   saveTemplate(t);
+  refreshToken++;
   res.json({ ok: true });
 });
 
 app.post('/api/template/reset', (_req, res) => {
   saveTemplate(DEFAULT_TEMPLATE);
+  refreshToken++;
   res.json(DEFAULT_TEMPLATE);
 });
 
@@ -199,12 +239,49 @@ app.get('/api/poll', (_req, res) => {
   const d = load();
   const interval = (d.interval && d.interval >= 60) ? d.interval : 300;
   const ssh = d.sshenabled === true;
-  const keepalive = (d.keepalive && d.keepalive >= 0) ? d.keepalive : 0;
-  res.json({ t: refreshToken, wifi: wifiEnabled, interval, ssh, keepalive });
+  const keepalive = d.keepalive === -1 ? -1 : (d.keepalive && d.keepalive >= 0 ? d.keepalive : 0);
+  // Clock overlay position from template
+  const tpl = loadTemplate();
+  const clockEl = tpl?.elements?.find(e => e.type === 'clock_space');
+  const clockX = clockEl ? Math.round(clockEl.x + clockEl.width / 2) : 300;
+  const clockY = clockEl ? clockEl.y : 50;
+  const clockW = clockEl ? clockEl.width : 320;
+  const clockH = clockEl ? clockEl.height : 105;
+  res.json({ t: refreshToken, wifi: wifiEnabled, interval, ssh, keepalive, clockX, clockY, clockW, clockH, battery: d.battery || 0, wifi_up: d.wifi_up === true });
+});
+
+// Kobo heartbeat — reports remaining WiFi lifetime (seconds), battery, and WiFi state
+app.get('/api/kobo/heartbeat', (req, res) => {
+  saveHeartbeat(parseInt(req.query.r) || 0);
+  const d = load();
+  const pct = parseInt(req.query.battery, 10);
+  if (pct && pct >= 0 && pct <= 100) d.battery = pct;
+  if (req.query.wifiUp === '1') d.wifi_up = true;
+  else if (req.query.wifiUp === '0') d.wifi_up = false;
+  save(d);
+  res.json({ ok: true });
+});
+
+// Kobo status — returns latest heartbeat info for admin UI
+app.get('/api/kobo/status', (_req, res) => {
+  const d = load();
+  // Compute estimated remaining based on elapsed time since last heartbeat
+  const elapsed = Math.floor((Date.now() - koboLastHeartbeat) / 1000);
+  const estimatedRemaining = Math.max(0, koboRemaining - elapsed);
+  res.json({
+    remaining: estimatedRemaining,
+    lastSeen: koboLastHeartbeat,
+    keepalive: d.keepalive || 0,
+    sshEnabled: d.sshenabled === true,
+    wifiEnabled: wifiEnabled,
+    battery: d.battery || 0,
+    wifi_up: d.wifi_up === true
+  });
 });
 
 app.post('/api/wifi/:state', (req, res) => {
   wifiEnabled = req.params.state === 'on';
+  refreshToken++;
   res.json({ ok: true, wifi: wifiEnabled });
 });
 
@@ -217,10 +294,23 @@ app.post('/api/ssh/:state', (req, res) => {
 
 app.post('/api/keepalive', (req, res) => {
   const d = load();
-  const n = parseInt(req.body.keepalive, 10);
-  d.keepalive = (n && n >= 0) ? n : 0;
+  let n = parseInt(req.body.keepalive, 10);
+  if (n === -1) {
+    d.keepalive = -1;
+  } else {
+    d.keepalive = (n && n >= 0) ? n : 0;
+  }
   save(d);
+  refreshToken++;
   res.json({ ok: true, keepalive: d.keepalive });
+});
+
+app.post('/api/battery', (req, res) => {
+  const d = load();
+  const pct = parseInt(req.body?.battery ?? req.query?.battery, 10);
+  if (pct && pct >= 0 && pct <= 100) d.battery = pct;
+  save(d);
+  res.json({ ok: true, battery: d.battery });
 });
 
 app.post('/api/interval', (req, res) => {
@@ -450,6 +540,7 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
       <div style="margin-bottom:8px">
         <label style="font-size:9px;letter-spacing:1px">WiFi keep-alive</label>
         <select id="keepalive-sel" onchange="setKeepalive(this)" style="width:100%;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;color:var(--text);font-size:11px;font-family:'Helvetica Neue',Arial,sans-serif;outline:none;margin-top:3px">
+          <option value="-1">Forever</option>
           <option value="0">Off immediately</option>
           <option value="30">30 seconds</option>
           <option value="60">1 minute</option>
@@ -458,6 +549,7 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
           <option value="1800">30 minutes</option>
           <option value="3600">1 hour</option>
         </select>
+        <div id="wifi-status" style="font-size:9px;color:var(--dim);margin-top:4px;font-family:'Courier New',monospace">WiFi: --</div>
       </div>
       <div style="margin-bottom:8px">
         <label style="font-size:9px;letter-spacing:1px">Auto-refresh</label>
@@ -897,6 +989,45 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
       }
     }
   }
+
+  // ── Kobo WiFi status ──────────────────────────────────────────
+  var wifiStatusEl = document.getElementById('wifi-status');
+  function updateWifiStatus() {
+    fetch('/api/kobo/status').then(function(r){return r.json()}).then(function(s){
+      var text = '';
+      var secAgo = s.lastSeen ? Math.floor((Date.now() - s.lastSeen) / 1000) : -1;
+      if (s.keepalive === -1) {
+        text = 'WiFi: forever (testing)';
+      } else if (s.sshEnabled || s.wifiEnabled) {
+        text = 'WiFi: always on';
+        if (s.sshEnabled) text += ' (SSH)';
+        if (s.keepalive > 0) {
+          var mins = Math.ceil(s.remaining / 60);
+          var hrs = Math.floor(mins / 60);
+          if (hrs > 0) text += ' \u00b7 ~' + hrs + 'h ' + (mins % 60) + 'm remaining';
+          else text += ' \u00b7 ~' + mins + 'm remaining';
+        }
+      } else if (s.remaining > 0) {
+        var mins = Math.ceil(s.remaining / 60);
+        var hrs = Math.floor(mins / 60);
+        if (hrs > 0) text = 'WiFi: ~' + hrs + 'h ' + (mins % 60) + 'm remaining';
+        else text = 'WiFi: ~' + mins + 'm remaining';
+        if (secAgo > 60) text += ' (stale)';
+      } else if (s.keepalive > 0) {
+        if (secAgo > 90) text = 'WiFi: waiting for Kobo...';
+        else text = 'WiFi: expired';
+      } else {
+        text = 'WiFi: off (on-demand)';
+      }
+      if (s.wifi_up) text += ' \u00b7 W'; else text += ' \u00b7 _';
+      if (s.sshEnabled) text += ' S';
+      if (s.battery) text += ' \u00b7 Bat: ' + s.battery + '%';
+      if (secAgo >= 0 && secAgo <= 90) text += ' \u00b7 ' + secAgo + 's ago';
+      wifiStatusEl.textContent = text;
+    }).catch(function(){});
+  }
+  updateWifiStatus();
+  setInterval(updateWifiStatus, 5000);
 
 })();
 </script>
