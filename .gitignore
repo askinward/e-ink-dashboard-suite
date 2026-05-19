@@ -1,6 +1,23 @@
+# Dependencies
 node_modules/
+
+# Logs
 *.log
-/images/background.*
+source_files_and_server/dashboard.log
+
+# Images (keep .gitkeep, ignore actual images)
+source_files_and_server/images/*.jpg
+source_files_and_server/images/*.png
+!source_files_and_server/images/.gitkeep
+
+# Temporary files
 /tmp/
-images/*.jpg
-images/*.png
+source_files_and_server/heartbeat.json
+source_files_and_server/dashboard-data.json
+
+# Backups
+*.zip
+*.tar.gz
+
+# Session notes
+sun_*.md

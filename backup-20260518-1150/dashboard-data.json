@@ -1,7 +1,7 @@
 {
   "quote": {
-    "text": "helloooo",
-    "author": "kadavul"
+    "text": "hi bro",
+    "author": "ajay"
   },
   "todos": [
     {
@@ -20,26 +20,19 @@
       "id": 1,
       "time": "09:00",
       "title": "Morning standup",
-      "description": "joining company"
+      "description": ""
     },
     {
       "id": 2,
       "time": "14:00",
       "title": "Deep work block",
       "description": "No interruptions"
-    },
-    {
-      "id": 100,
-      "time": "09:00",
-      "title": "laptop instal",
-      "description": ""
     }
   ],
   "background": "/images/background.jpg",
-  "updated_at": "2026-05-19T01:02:38.149Z",
-  "interval": 300,
+  "updated_at": "2026-05-18T15:10:47.718Z",
+  "interval": 86400,
   "sshenabled": true,
   "keepalive": -1,
-  "battery": 96,
-  "wifi_up": true
+  "battery": 72
 }
