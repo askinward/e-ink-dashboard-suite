@@ -164,7 +164,14 @@ def main():
         if not el.get("visible", True):
             continue
 
+        el_id = el.get("id", "")
         el_type = el.get("type", "text")
+        text_content = el.get("text", "")
+
+        # Skip clock text - it's rendered locally by the Kobo client
+        if el_id == "clock-text" or "{current_time}" in text_content:
+            continue
+
         font_fam = el.get("font", "Sans")
         font_sty = el.get("style", "Regular")
         font_sz = el.get("size", 12)

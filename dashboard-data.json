@@ -1,7 +1,7 @@
 {
   "quote": {
     "text": "helloooo",
-    "author": "ooo"
+    "author": "kadavul"
   },
   "todos": [
     {
@@ -20,20 +20,26 @@
       "id": 1,
       "time": "09:00",
       "title": "Morning standup",
-      "description": ""
+      "description": "joining company"
     },
     {
       "id": 2,
       "time": "14:00",
       "title": "Deep work block",
       "description": "No interruptions"
+    },
+    {
+      "id": 100,
+      "time": "09:00",
+      "title": "laptop instal",
+      "description": ""
     }
   ],
   "background": "/images/background.jpg",
-  "updated_at": "2026-05-18T21:06:59.395Z",
-  "interval": 86400,
-  "sshenabled": false,
+  "updated_at": "2026-05-19T01:02:38.149Z",
+  "interval": 300,
+  "sshenabled": true,
   "keepalive": -1,
-  "battery": 32,
+  "battery": 96,
   "wifi_up": true
 }

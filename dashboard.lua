@@ -19,12 +19,10 @@ local CLOCK_TICK = 60
 
 -- State
 local refreshInterval = 300
-local keepWiFiOn = true     -- always-on for testing
 local lastToken = -1
-local sshKeepalive = true   -- always-on for testing
-local wifiKeepAliveTicks = 3600  -- 1h default for testing
-local wifiOffCounter = 0
-local clockX, clockY, clockW, clockH = 300, 50, 320, 105
+local serverWifiOn = true
+local serverSshOn = false
+local clockX, clockY, clockW, clockH, clockSize, clockInverted = 300, 50, 320, 105, 64, false
 
 -- Helpers
 local function log(msg)
@@ -76,15 +74,67 @@ local function fb(args)
     os.execute(FBINK .. " -q " .. args)
 end
 
-local function ttf(font, size, x, y, text)
-    text = text:gsub('"', '\\"')
-    fb("-t regular=" .. font .. ",size=" .. size .. " -x 0 -X " .. (x or 0) .. " -y 0 -Y " .. (y or 0) .. ' "' .. text .. '"')
+-- Restore a rectangular region of the framebuffer from the cached raw image
+local function restoreBackground(left, top, w, h)
+    local fin = io.open("/tmp/dashboard.raw", "rb")
+    local fout = io.open("/dev/fb0", "r+b")
+    if fin and fout then
+        for i = 0, h - 1 do
+            local off = (top + i) * 608 + left
+            fin:seek("set", off)
+            fout:seek("set", off)
+            local data = fin:read(w)
+            if data then fout:write(data) end
+        end
+        fin:close()
+        fout:close()
+    end
+end
+
+local function ttf(font, size, x, y, text, w, h)
+    text = text:gsub("'", "'\\''")
+    local inv = clockInverted and " -h" or ""
+    -- For the shadow/halo, we use the opposite of the main text's inversion
+    local shadowInv = clockInverted and "" or " -h"
+    
+    if w and h then
+        local left = x - math.floor(w / 2)
+        local top = y
+        local right = 600 - (left + w)
+        local bottom = 800 - (top + h)
+
+        -- 1. Erase old time by restoring background pixels for the ENTIRE area
+        restoreBackground(left, top, w, h)
+
+        -- 2. Draw shadow/halo (8 positions for a thick 2px-ish look)
+        -- This ensures legibility on any background
+        local offsets = {
+            {2,0}, {-2,0}, {0,2}, {0,-2},
+            {2,2}, {2,-2}, {-2,2}, {-2,-2}
+        }
+        for _, off in ipairs(offsets) do
+            local ox, oy = off[1], off[2]
+            fb("-t regular=" .. font .. ",px=" .. size .. ",top=" .. (top+oy) .. ",left=" .. (left+ox) .. ",right=" .. (right-ox) .. ",bottom=" .. (bottom-oy) .. " -m -M -O" .. shadowInv .. " -b '" .. text .. "'")
+        end
+
+        -- 3. Draw the main text centered in that EXACT region with transparency (-O)
+        fb("-t regular=" .. font .. ",px=" .. size .. ",top=" .. top .. ",left=" .. left .. ",right=" .. right .. ",bottom=" .. bottom .. " -m -M -O" .. inv .. " '" .. text .. "'")
+    else
+        fb("-t regular=" .. font .. ",px=" .. size .. " -x " .. (x or 0) .. " -y " .. (y or 0) .. " -O" .. inv .. " '" .. text .. "'")
+    end
 end
 
 -- Status message at bottom of screen (inverted, temporary)
 local function showStatus(msg)
     msg = msg:gsub('"', '\\"')
     fb("-t regular=" .. F.sans_b .. ",size=18 -y -1 -h '" .. msg .. "'")
+end
+
+-- Clear status message area at bottom of screen
+local function clearStatus()
+    -- Restore from background instead of clearing to white
+    restoreBackground(0, 775, 600, 25)
+    fb("-s top=775,left=0,width=600,height=25")
 end
 
 -- WiFi
@@ -130,6 +180,14 @@ local function readBattery()
     return nil
 end
 
+local function sshIsUp()
+    local f = io.popen("ps 2>/dev/null | grep -c -e '[d]ropbear' -e '[s]shd'", "r")
+    if not f then return false end
+    local n = tonumber(f:read("*a")) or 0
+    f:close()
+    return n > 0
+end
+
 -- Draw full dashboard from server (caller must ensure WiFi is up)
 local function drawDashboard()
     showStatus("Downloading...")
@@ -150,7 +208,7 @@ local function drawDashboard()
             fb:close()
         end
         os.execute(FBINK .. " -s -f -q")
-        ttf(F.serif, 64, clockX, clockY, os.date("%H:%M"))
+        ttf(F.serif, clockSize, clockX, clockY, os.date("%H:%M"), clockW, clockH)
         os.execute("rm -f /tmp/wget_err.log /tmp/dashboard.raw")
         return false
     end
@@ -211,11 +269,32 @@ local function waitForTouch(timeout_sec)
     return false, -1, -1
 end
 
+-- Enforce server-side WiFi/SSH settings after a poll sync
+local function enforceSettings()
+    if serverWifiOn == true then
+        if not wifiIsUp() then wifiOn() end
+    elseif serverWifiOn == false then
+        if wifiIsUp() then wifiOff() end
+    end
+    if serverSshOn == true then
+        if not sshIsUp() then
+            os.execute("dropbear -R -p 2222 2>/dev/null")
+        end
+    elseif serverSshOn == false then
+        if sshIsUp() then
+            os.execute("killall dropbear 2>/dev/null")
+        end
+    end
+end
+
 -- Poll server. Returns true if Kobo should redraw.
 -- Caller must ensure WiFi is up before calling.
 local function checkServer()
     showStatus("Checking server...")
-    local f = io.popen('wget -q -O - -T 10 "' .. SERVER_URL .. '/api/poll" 2>/dev/null', "r")
+    local bat = readBattery() or ""
+    local wu = wifiIsUp() and 1 or 0
+    local su = sshIsUp() and 1 or 0
+    local f = io.popen('wget -q -O - -T 10 "' .. SERVER_URL .. '/api/poll?battery=' .. bat .. '&wifiUp=' .. wu .. '&sshUp=' .. su .. '" 2>/dev/null', "r")
     if not f then return false end
     local raw = f:read("*a")
     f:close()
@@ -236,10 +315,10 @@ local function checkServer()
 
     do
         local w = raw:match('"wifi":true')
-        if w then keepWiFiOn = true
+        if w then serverWifiOn = true
         else
             w = raw:match('"wifi":false')
-            if w then keepWiFiOn = false end
+            if w then serverWifiOn = false end
         end
     end
 
@@ -250,20 +329,11 @@ local function checkServer()
 
     do
         local s = raw:match('"ssh":true')
-        if s then sshKeepalive = true
+        if s then serverSshOn = true
         else
             s = raw:match('"ssh":false')
-            if s then sshKeepalive = false end
+            if s then serverSshOn = false end
         end
-    end
-
-    local ka = extractNum(raw, "keepalive")
-    if ka == -1 then
-        keepWiFiOn = true
-        wifiKeepAliveTicks = 60  -- doesn't matter, always-on overrides
-    elseif ka and ka >= 0 then
-        keepWiFiOn = false
-        wifiKeepAliveTicks = math.max(0, math.floor(ka / CLOCK_TICK))
     end
 
     local cx = extractNum(raw, "clockX")
@@ -274,6 +344,16 @@ local function checkServer()
     if cw then clockW = cw end
     local ch = extractNum(raw, "clockH")
     if ch then clockH = ch end
+    local cs = extractNum(raw, "clockSize")
+    if cs then clockSize = cs end
+    do
+        local inv = raw:match('"clockInverted":true')
+        if inv then clockInverted = true
+        else
+            inv = raw:match('"clockInverted":false')
+            if inv then clockInverted = false end
+        end
+    end
 
     return shouldRedraw
 end
@@ -299,20 +379,10 @@ if wifiIsUp() then
         if raw and #raw > 0 then
             local intv = extractNum(raw, "interval")
             if intv and intv >= 60 then refreshInterval = intv end
-            if raw:match('"ssh":true') then sshKeepalive = true
-            elseif raw:match('"ssh":false') then sshKeepalive = false end
-            if raw:match('"wifi":true') then keepWiFiOn = true
-            elseif raw:match('"wifi":false') then keepWiFiOn = false end
-            local ka = extractNum(raw, "keepalive")
-            if ka == -1 then
-                keepWiFiOn = true
-                wifiKeepAliveTicks = 60
-                log("Startup poll: forever mode")
-            elseif ka and ka >= 0 then
-                keepWiFiOn = false
-                wifiKeepAliveTicks = math.max(0, math.floor(ka / CLOCK_TICK))
-                log("Startup poll: wifiKeepAliveTicks set to " .. wifiKeepAliveTicks)
-            end
+            if raw:match('"ssh":true') then serverSshOn = true
+            elseif raw:match('"ssh":false') then serverSshOn = false end
+            if raw:match('"wifi":true') then serverWifiOn = true
+            elseif raw:match('"wifi":false') then serverWifiOn = false end
             local cx = extractNum(raw, "clockX")
             if cx then clockX = cx end
             local cy = extractNum(raw, "clockY")
@@ -321,7 +391,14 @@ if wifiIsUp() then
             if cw then clockW = cw end
             local ch = extractNum(raw, "clockH")
             if ch then clockH = ch end
-            log("Startup poll: clock at " .. clockX .. "," .. clockY .. " size " .. clockW .. "x" .. clockH)
+            local cs = extractNum(raw, "clockSize")
+            if cs then clockSize = cs end
+            do
+                local inv = raw:match('"clockInverted":true')
+                if inv then clockInverted = true
+                elseif raw:match('"clockInverted":false') then clockInverted = false end
+            end
+            log("Startup poll: clock at " .. clockX .. "," .. clockY .. " size " .. clockW .. "x" .. clockH .. " font " .. clockSize .. " inv=" .. tostring(clockInverted))
         end
     else
         log("Startup poll: popen failed")
@@ -329,16 +406,14 @@ if wifiIsUp() then
 else
     log("Startup poll: WiFi is down")
 end
-log("Startup: wifiKeepAliveTicks=" .. wifiKeepAliveTicks .. " ssh=" .. tostring(sshKeepalive) .. " keepWiFiOn=" .. tostring(keepWiFiOn))
-wifiOffCounter = wifiKeepAliveTicks
-log("Startup: wifiOffCounter=" .. wifiOffCounter)
+enforceSettings()
+log("Startup complete")
 
 -- Main loop
 local cycle = 0
 local tickCount = 0
 local lastLoopTime = os.time()
 
-local justWoke = false
 local running = true
 while running do
     local ok, err = pcall(function()
@@ -351,23 +426,17 @@ while running do
     if elapsed > CLOCK_TICK + 10 then
         log("Wake from sleep (+" .. elapsed .. "s gap)")
         showStatus("Waking up...")
-        justWoke = true
         -- Re-download full dashboard (framebuffer may be lost during sleep)
         if wifiIsUp() or wifiOn() then
-            -- Send heartbeat so server renders indicators with current state
-            local wu = wifiIsUp() and 1 or 0
-            local bat = readBattery() or ""
-            local wr = wifiOffCounter * CLOCK_TICK
-            os.execute('wget -q -O /dev/null -T 3 "' .. SERVER_URL .. '/api/kobo/heartbeat?r=' .. wr .. '&battery=' .. bat .. '&wifiUp=' .. wu .. '" 2>/dev/null')
             os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 15 2>/dev/null')
             os.execute('test -s /tmp/dashboard.raw && cat /tmp/dashboard.raw > /dev/fb0 2>/dev/null')
         end
         fb("-s -f -q")
+        tickCount = 0 -- Reset tick count on wake to align with current time
         os.execute("sleep 2")
     end
 
     cycle = cycle + 1
-    tickCount = tickCount + 1
     killKOReader()
 
     if touched then
@@ -389,31 +458,39 @@ while running do
         running = false; return
     end
 
-    local needsData = false
+    -- 1. Update clock locally every minute
+    ttf(F.serif, clockSize, clockX, clockY, os.date("%H:%M"), clockW, clockH)
+    clearStatus()
+
+    -- 2. Check if we need to poll the server for data/refresh
+    local needsServer = false
 
     if touched then
-        needsData = true
+        needsServer = true
         showStatus("Refreshing...")
-        log("Touch refresh at " .. (tapX or -1) .. "," .. (tapY or -1))
-        wifiOffCounter = wifiKeepAliveTicks  -- postpone WiFi shutdown on activity
+        log("Touch refresh triggered")
     end
 
     local sf = io.open(SIGNAL_FILE, "r")
     if sf then
         sf:close()
         os.execute("rm -f " .. SIGNAL_FILE)
-        needsData = true
+        needsServer = true
         showStatus("Refreshing...")
         log("Signal file refresh triggered")
     end
 
+    -- Interval check: tickCount is in minutes (CLOCK_TICK=60)
+    -- refreshInterval is in seconds (e.g., 300 for 5 min)
     if tickCount * CLOCK_TICK >= refreshInterval then
-        needsData = true
+        needsServer = true
         tickCount = 0
-        log("Scheduled refresh (interval=" .. refreshInterval .. "s)")
+        log("Scheduled server check (interval=" .. refreshInterval .. "s)")
+    else
+        tickCount = tickCount + 1
     end
 
-    if needsData then
+    if needsServer then
         local wifiOk = true
         if not wifiIsUp() then
             log("WiFi was down, reconnecting")
@@ -424,57 +501,21 @@ while running do
             local shouldRedraw = checkServer()
             if shouldRedraw or touched then
                 drawDashboard()
+                -- Redraw clock after dashboard to ensure it's on top
+                ttf(F.serif, clockSize, clockX, clockY, os.date("%H:%M"), clockW, clockH)
             end
+            enforceSettings()
+            clearStatus()
         else
             showStatus("WiFi failed")
-            log("needsData: wifiOn failed, skipping refresh")
-        end
-        if not keepWiFiOn and not sshKeepalive then
-            if wifiKeepAliveTicks > 0 then
-                wifiOffCounter = wifiKeepAliveTicks
-            else
-                wifiOff()
-            end
-        end
-    else
-        -- No needsData this cycle — countdown to WiFi shutdown
-        if not keepWiFiOn and not sshKeepalive then
-            if wifiOffCounter > 0 then
-                wifiOffCounter = wifiOffCounter - 1
-                if wifiOffCounter <= 0 then
-                    log("WiFi keepalive expired, shutting down")
-                    wifiOff()
-                end
-            end
-        else
-            -- SSH or WiFi always-on: keep WiFi up, reset counter
-            wifiOffCounter = wifiKeepAliveTicks
+            log("needsServer: wifiOn failed, skipping refresh")
         end
     end
 
     -- Periodic full refresh to prevent e-ink ghosting (every 30 cycles = 30min)
     if cycle > 0 and math.fmod(cycle, 30) == 0 then
         fb("-s -f -q")
-    end
-
-    -- Report WiFi state and battery to server FIRST (before dashboard download)
-    local wr = wifiOffCounter * CLOCK_TICK
-    local bat = readBattery() or ""
-    local wu = wifiIsUp() and 1 or 0
-    log("Heartbeat: wifiOffCounter=" .. wifiOffCounter .. " wr=" .. wr .. " battery=" .. bat .. " wifiUp=" .. wu)
-    os.execute('wget -q -O /dev/null -T 3 "' .. SERVER_URL .. '/api/kobo/heartbeat?r=' .. wr .. '&battery=' .. bat .. '&wifiUp=' .. wu .. '" 2>/dev/null')
-
-    -- Download fresh dashboard (server rendered with latest heartbeat data), partial refresh clock area
-    local cl = clockX - math.floor(clockW / 2)
-    os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 10 2>/dev/null')
-    if os.execute('test -s /tmp/dashboard.raw') == 0 then
-        os.execute('cat /tmp/dashboard.raw > /dev/fb0 2>/dev/null')
-        if justWoke then
-            fb("-s -f -q")
-            justWoke = false
-        else
-            fb("-s top=" .. clockY .. ",left=" .. cl .. ",width=" .. clockW .. ",height=" .. clockH)
-        end
+        ttf(F.serif, clockSize, clockX, clockY, os.date("%H:%M"), clockW, clockH)
     end
     end)  -- pcall
     if not ok then

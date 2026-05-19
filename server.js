@@ -66,7 +66,6 @@ const DEFAULTS = {
   background: null,
   interval: 300,
   sshenabled: true,
-  keepalive: 0,
   updated_at: new Date().toISOString()
 };
 
@@ -235,11 +234,19 @@ app.post('/api/refresh', (_req, res) => {
   res.json({ ok: true, token: refreshToken });
 });
 
-app.get('/api/poll', (_req, res) => {
+app.get('/api/poll', (req, res) => {
   const d = load();
+  // Save Kobo state from poll params (replaces separate heartbeat)
+  const pct = parseInt(req.query.battery, 10);
+  if (pct && pct >= 0 && pct <= 100) d.battery = pct;
+  if (req.query.wifiUp === '1') d.wifi_up = true;
+  else if (req.query.wifiUp === '0') d.wifi_up = false;
+  if (req.query.sshUp === '1') d.sshenabled = true;
+  else if (req.query.sshUp === '0') d.sshenabled = false;
+  save(d);
+  koboLastHeartbeat = Date.now();
   const interval = (d.interval && d.interval >= 60) ? d.interval : 300;
   const ssh = d.sshenabled === true;
-  const keepalive = d.keepalive === -1 ? -1 : (d.keepalive && d.keepalive >= 0 ? d.keepalive : 0);
   // Clock overlay position from template
   const tpl = loadTemplate();
   const clockEl = tpl?.elements?.find(e => e.type === 'clock_space');
@@ -247,17 +254,20 @@ app.get('/api/poll', (_req, res) => {
   const clockY = clockEl ? clockEl.y : 50;
   const clockW = clockEl ? clockEl.width : 320;
   const clockH = clockEl ? clockEl.height : 105;
-  res.json({ t: refreshToken, wifi: wifiEnabled, interval, ssh, keepalive, clockX, clockY, clockW, clockH, battery: d.battery || 0, wifi_up: d.wifi_up === true });
+  const clockSize = tpl?.elements?.find(e => e.id === 'clock-text')?.size || 64;
+  const clockInverted = tpl?.elements?.find(e => e.id === 'clock-text')?.inverted === true;
+  res.json({ t: refreshToken, wifi: wifiEnabled, interval, ssh, clockX, clockY, clockW, clockH, clockSize, clockInverted, battery: d.battery || 0, wifi_up: d.wifi_up === true });
 });
 
-// Kobo heartbeat — reports remaining WiFi lifetime (seconds), battery, and WiFi state
+// Kobo heartbeat — reports battery, WiFi state, and SSH state
 app.get('/api/kobo/heartbeat', (req, res) => {
-  saveHeartbeat(parseInt(req.query.r) || 0);
   const d = load();
   const pct = parseInt(req.query.battery, 10);
   if (pct && pct >= 0 && pct <= 100) d.battery = pct;
   if (req.query.wifiUp === '1') d.wifi_up = true;
   else if (req.query.wifiUp === '0') d.wifi_up = false;
+  if (req.query.sshUp === '1') d.sshenabled = true;
+  else if (req.query.sshUp === '0') d.sshenabled = false;
   save(d);
   res.json({ ok: true });
 });
@@ -265,13 +275,8 @@ app.get('/api/kobo/heartbeat', (req, res) => {
 // Kobo status — returns latest heartbeat info for admin UI
 app.get('/api/kobo/status', (_req, res) => {
   const d = load();
-  // Compute estimated remaining based on elapsed time since last heartbeat
-  const elapsed = Math.floor((Date.now() - koboLastHeartbeat) / 1000);
-  const estimatedRemaining = Math.max(0, koboRemaining - elapsed);
   res.json({
-    remaining: estimatedRemaining,
     lastSeen: koboLastHeartbeat,
-    keepalive: d.keepalive || 0,
     sshEnabled: d.sshenabled === true,
     wifiEnabled: wifiEnabled,
     battery: d.battery || 0,
@@ -538,17 +543,6 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
         <button class="btn" id="ssh-btn" onclick="toggleSsh()" style="flex:1;padding:8px 0;font-size:11px;opacity:0.6">SSH ◉</button>
       </div>
       <div style="margin-bottom:8px">
-        <label style="font-size:9px;letter-spacing:1px">WiFi keep-alive</label>
-        <select id="keepalive-sel" onchange="setKeepalive(this)" style="width:100%;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;color:var(--text);font-size:11px;font-family:'Helvetica Neue',Arial,sans-serif;outline:none;margin-top:3px">
-          <option value="-1">Forever</option>
-          <option value="0">Off immediately</option>
-          <option value="30">30 seconds</option>
-          <option value="60">1 minute</option>
-          <option value="300">5 minutes</option>
-          <option value="900">15 minutes</option>
-          <option value="1800">30 minutes</option>
-          <option value="3600">1 hour</option>
-        </select>
         <div id="wifi-status" style="font-size:9px;color:var(--dim);margin-top:4px;font-family:'Courier New',monospace">WiFi: --</div>
       </div>
       <div style="margin-bottom:8px">
@@ -660,17 +654,6 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
       document.getElementById('sec-' + link.dataset.sec).classList.add('on');
     });
   });
-
-  // ── Keepalive ──────────────────────────────────────────────────
-  window.setKeepalive = function (sel) {
-    fetch('/api/keepalive', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keepalive: parseInt(sel.value, 10) })
-    }).then(function (r) { return r.json(); }).then(function (d) {
-      if (d.ok) toast('WiFi keep-alive: ' + d.keepalive + 's', 'ok');
-    }).catch(function () { toast('Failed to set keepalive', 'err'); });
-  };
 
   // ── Interval ───────────────────────────────────────────────────
   window.setInterval_s = function (sel) {
@@ -980,48 +963,16 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
       }
     }
   }
-  // Init keepalive selector from loaded data
-  var kaSel = document.getElementById('keepalive-sel');
-  if (state.keepalive !== undefined) {
-    for (var i = 0; i < kaSel.options.length; i++) {
-      if (parseInt(kaSel.options[i].value, 10) === state.keepalive) {
-        kaSel.selectedIndex = i; break;
-      }
-    }
-  }
 
   // ── Kobo WiFi status ──────────────────────────────────────────
   var wifiStatusEl = document.getElementById('wifi-status');
   function updateWifiStatus() {
     fetch('/api/kobo/status').then(function(r){return r.json()}).then(function(s){
-      var text = '';
-      var secAgo = s.lastSeen ? Math.floor((Date.now() - s.lastSeen) / 1000) : -1;
-      if (s.keepalive === -1) {
-        text = 'WiFi: forever (testing)';
-      } else if (s.sshEnabled || s.wifiEnabled) {
-        text = 'WiFi: always on';
-        if (s.sshEnabled) text += ' (SSH)';
-        if (s.keepalive > 0) {
-          var mins = Math.ceil(s.remaining / 60);
-          var hrs = Math.floor(mins / 60);
-          if (hrs > 0) text += ' \u00b7 ~' + hrs + 'h ' + (mins % 60) + 'm remaining';
-          else text += ' \u00b7 ~' + mins + 'm remaining';
-        }
-      } else if (s.remaining > 0) {
-        var mins = Math.ceil(s.remaining / 60);
-        var hrs = Math.floor(mins / 60);
-        if (hrs > 0) text = 'WiFi: ~' + hrs + 'h ' + (mins % 60) + 'm remaining';
-        else text = 'WiFi: ~' + mins + 'm remaining';
-        if (secAgo > 60) text += ' (stale)';
-      } else if (s.keepalive > 0) {
-        if (secAgo > 90) text = 'WiFi: waiting for Kobo...';
-        else text = 'WiFi: expired';
-      } else {
-        text = 'WiFi: off (on-demand)';
-      }
+      var text = 'WiFi: ' + (s.wifi_up ? 'on' : 'off');
       if (s.wifi_up) text += ' \u00b7 W'; else text += ' \u00b7 _';
       if (s.sshEnabled) text += ' S';
       if (s.battery) text += ' \u00b7 Bat: ' + s.battery + '%';
+      var secAgo = s.lastSeen ? Math.floor((Date.now() - s.lastSeen) / 1000) : -1;
       if (secAgo >= 0 && secAgo <= 90) text += ' \u00b7 ' + secAgo + 's ago';
       wifiStatusEl.textContent = text;
     }).catch(function(){});
