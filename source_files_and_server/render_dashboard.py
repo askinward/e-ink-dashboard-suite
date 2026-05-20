@@ -77,7 +77,7 @@ def resolve_vars(text, data, now):
         "{quote_author}": (data.get("quote") or {}).get("author") or "",
         "{updated_at}": (data.get("updated_at") or ""),
         "{current_time}": now.strftime("%H:%M"),
-        "{wifi_indicator}": "W" if data.get("wifi_up") else "",
+        "{wifi_indicator}": "W" if data.get("wifi_enabled", True) else "",
         "{ssh_indicator}": "S" if data.get("sshenabled") else "",
     }
     for k, v in subs.items():

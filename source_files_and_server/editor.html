@@ -487,7 +487,7 @@ loadData(() => {
 
 window.triggerRefresh = function(){
   fetch('/api/refresh',{method:'POST'}).then(r=>r.json()).then(d=>{
-    if(d.ok) toast('Refresh sent (Kobo picks up within 60s)','ok');
+    if(d.ok) toast('Refresh sent (Kobo picks up within ' + (data.interval || 300) + 's)','ok');
     else toast('Refresh failed','err');
   }).catch(()=>toast('Network error','err'));
 };

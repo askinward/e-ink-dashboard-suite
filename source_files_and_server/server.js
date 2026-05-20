@@ -46,6 +46,8 @@ const app     = express();
 const PORT    = process.env.PORT || 5001;
 const DATA    = path.join(__dirname, 'dashboard-data.json');
 const IMG_DIR = path.join(__dirname, 'images');
+// Load persisted wifi state from data file
+try { wifiEnabled = JSON.parse(fs.readFileSync(DATA, 'utf8')).wifi_enabled !== false; } catch {};
 
 if (!fs.existsSync(IMG_DIR)) fs.mkdirSync(IMG_DIR, { recursive: true });
 
@@ -66,6 +68,7 @@ const DEFAULTS = {
   background: null,
   interval: 300,
   sshenabled: true,
+  wifi_enabled: true,
   updated_at: new Date().toISOString()
 };
 
@@ -241,8 +244,6 @@ app.get('/api/poll', (req, res) => {
   if (pct && pct >= 0 && pct <= 100) d.battery = pct;
   if (req.query.wifiUp === '1') d.wifi_up = true;
   else if (req.query.wifiUp === '0') d.wifi_up = false;
-  if (req.query.sshUp === '1') d.sshenabled = true;
-  else if (req.query.sshUp === '0') d.sshenabled = false;
   save(d);
   koboLastHeartbeat = Date.now();
   const interval = (d.interval && d.interval >= 60) ? d.interval : 300;
@@ -266,8 +267,6 @@ app.get('/api/kobo/heartbeat', (req, res) => {
   if (pct && pct >= 0 && pct <= 100) d.battery = pct;
   if (req.query.wifiUp === '1') d.wifi_up = true;
   else if (req.query.wifiUp === '0') d.wifi_up = false;
-  if (req.query.sshUp === '1') d.sshenabled = true;
-  else if (req.query.sshUp === '0') d.sshenabled = false;
   save(d);
   res.json({ ok: true });
 });
@@ -286,6 +285,9 @@ app.get('/api/kobo/status', (_req, res) => {
 
 app.post('/api/wifi/:state', (req, res) => {
   wifiEnabled = req.params.state === 'on';
+  const d = load();
+  d.wifi_enabled = wifiEnabled;
+  save(d);
   refreshToken++;
   res.json({ ok: true, wifi: wifiEnabled });
 });
@@ -294,6 +296,7 @@ app.post('/api/ssh/:state', (req, res) => {
   const d = load();
   d.sshenabled = req.params.state === 'on';
   save(d);
+  refreshToken++;
   res.json({ ok: true, ssh: d.sshenabled });
 });
 
@@ -671,7 +674,7 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
     fetch('/api/refresh', { method: 'POST' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (d.ok) toast('Refresh signal sent — Kobo will pick up within 60s', 'ok');
+        if (d.ok) toast('Refresh signal sent — Kobo will pick up within ' + (state.interval || 300) + 's', 'ok');
         else toast('Refresh failed', 'err');
       })
       .catch(function () { toast('Network error', 'err'); });
@@ -686,7 +689,7 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); c
         .then(function (d) {
           if (d.ok) {
             document.getElementById('wifi-btn').textContent = d.wifi ? 'WiFi ◉' : 'WiFi ⊙';
-            toast('WiFi ' + (d.wifi ? 'enabled' : 'disabled') + ' — Kobo picks up within 60s', 'ok');
+            toast('WiFi ' + (d.wifi ? 'enabled' : 'disabled') + ' — Kobo picks up within ' + (state.interval || 300) + 's', 'ok');
           }
         });
     }).catch(function () { toast('Network error', 'err'); });

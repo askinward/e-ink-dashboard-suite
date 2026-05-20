@@ -4,7 +4,21 @@ package.path = "/mnt/onboard/common/?.lua;" .. package.path
 package.cpath = "/mnt/onboard/common/?.so;" .. package.cpath
 
 local FBINK = "/mnt/onboard/fbink"
-local SERVER_URL = "http://10.100.145.133:5001"
+local CONFIG_FILE = "/mnt/onboard/.adds/dashboard/server_url"
+local SERVER_URL
+
+-- Read server URL from config file; fall back if missing
+do
+    local f = io.open(CONFIG_FILE, "r")
+    if f then
+        SERVER_URL = f:read("*a"):match("^%s*(.-)%s*$")
+        f:close()
+    end
+    if not SERVER_URL or #SERVER_URL == 0 then
+        SERVER_URL = "http://10.100.145.133:5001"
+    end
+end
+
 local LOG_FILE = "/mnt/onboard/.adds/dashboard/dashboard.log"
 local F = {
     serif = "/mnt/onboard/fonts/noto/NotoSerif-Regular.ttf",
@@ -25,12 +39,37 @@ local serverSshOn = false
 local clockX, clockY, clockW, clockH, clockSize, clockInverted = 300, 50, 320, 105, 64, false
 
 -- Helpers
-local function log(msg)
+local function log(level, msg)
     local f = io.open(LOG_FILE, "a")
     if f then
-        f:write(os.date("%Y-%m-%d %H:%M:%S") .. " " .. msg .. "\n")
-        f:close()
+        -- Truncate log if it exceeds 64KB
+        local size = f:seek("end")
+        if size > 65536 then
+            local keep = 32768
+            f:close()
+            local rf = io.open(LOG_FILE, "r")
+            local content = rf and rf:read("*a")
+            if rf then rf:close() end
+            if content then
+                local tail = content:sub(math.max(1, #content - keep))
+                f = io.open(LOG_FILE, "w")
+                if f then f:write(tail); f:close() end
+            end
+            f = io.open(LOG_FILE, "a")
+        end
+        if f then
+            f:write(os.date("%Y-%m-%d %H:%M:%S") .. " [" .. level .. "] " .. msg .. "\n")
+            f:close()
+        end
     end
+end
+
+local function shell(cmd)
+    local f = io.popen(cmd .. " 2>&1", "r")
+    if not f then return "", -1 end
+    local out = f:read("*a")
+    local ok, _, rc = f:close()
+    return out or "", rc or 0
 end
 
 local function extractNum(raw, key)
@@ -64,7 +103,7 @@ local function killKOReader()
         f:close()
         if pids and #pids > 0 then
             os.execute("kill " .. pids .. " 2>/dev/null")
-            log("Killed KOReader: " .. pids)
+            log("INFO", "Killed KOReader: " .. pids)
         end
     end
     os.execute("killall koreader.sh nickel hindenburg 2>/dev/null")
@@ -154,11 +193,11 @@ local function wifiOn()
     for i = 1, 15 do
         os.execute("sleep 1")
         if wifiIsUp() then
-            log("WiFi got IP after " .. i .. "s")
+            log("INFO", "WiFi got IP after " .. i .. "s")
             return true
         end
     end
-    log("WiFi failed to get IP after 15s")
+    log("ERROR", "WiFi failed to get IP after 15s")
     return false
 end
 
@@ -191,13 +230,16 @@ end
 -- Draw full dashboard from server (caller must ensure WiFi is up)
 local function drawDashboard()
     showStatus("Downloading...")
-    os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 15 2>/tmp/wget_err.log')
-    local ok = os.execute('test -s /tmp/dashboard.raw')
-    if ok ~= 0 then
+    local wgetRc = os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 15 2>/tmp/wget_err.log')
+    local rawSize = 0
+    local fsize = io.open("/tmp/dashboard.raw", "r")
+    if fsize then rawSize = fsize:seek("end"); fsize:close() end
+    log("INFO", "drawDashboard: wget rc=" .. (wgetRc or -1) .. " filesize=" .. rawSize)
+    if rawSize ~= 486400 then
         local ef = io.open("/tmp/wget_err.log", "r")
-        local err = (ef and ef:read("*a")) or "unknown"
+        local err = (ef and ef:read("*a")) or ""
         if ef then ef:close() end
-        log("Download failed: " .. err:gsub("\n", " "))
+        log("ERROR", "Download: expected 486400 bytes, got " .. rawSize .. ". wget stderr: " .. err:gsub("\n", " "))
         showStatus("Download failed")
         -- Fill screen white so it's not black
         local fb = io.open("/dev/fb0", "r+b")
@@ -272,19 +314,48 @@ end
 -- Enforce server-side WiFi/SSH settings after a poll sync
 local function enforceSettings()
     if serverWifiOn == true then
-        if not wifiIsUp() then wifiOn() end
+        local wasUp = wifiIsUp()
+        if not wasUp then wifiOn() end
+        log("INFO", "wifi: desired=on wasUp=" .. tostring(wasUp) .. " now=" .. tostring(wifiIsUp()))
     elseif serverWifiOn == false then
-        if wifiIsUp() then wifiOff() end
+        local wasUp = wifiIsUp()
+        if wasUp then wifiOff() end
+        log("INFO", "wifi: desired=off wasUp=" .. tostring(wasUp) .. " now=" .. tostring(wifiIsUp()))
     end
     if serverSshOn == true then
-        if not sshIsUp() then
-            os.execute("dropbear -R -p 2222 2>/dev/null")
-        end
+        -- Ensure root has no password for -B to work
+        os.execute("passwd -d root 2>/dev/null")
+        os.execute("killall dropbear 2>/dev/null")
+        local rc = os.execute("/mnt/onboard/dropbear -B -p 2222 -r /mnt/onboard/settings/SSH/dropbear_ed25519_host_key 2>/tmp/dropbear_err.log")
+        local err = ""
+        local ef = io.open("/tmp/dropbear_err.log", "r")
+        if ef then err = ef:read("*a"):gsub("\n", " "); ef:close() end
+        local running = (os.execute("pidof dropbear >/dev/null 2>&1") == 0)
+        log("INFO", "dropbear: start rc=" .. (rc or -1) .. " running=" .. tostring(running) .. " err=" .. err)
     elseif serverSshOn == false then
-        if sshIsUp() then
-            os.execute("killall dropbear 2>/dev/null")
+        os.execute("killall dropbear 2>/dev/null")
+        log("INFO", "dropbear: killed (serverSshOn=false)")
+    end
+end
+
+-- Ensure WiFi is properly up for server communication.
+-- Returns true if reachable, false otherwise.
+local function ensureWifi()
+    local wifiOk = wifiIsUp()
+    if not wifiOk then
+        log("INFO", "ensureWifi: down, connecting")
+        wifiOk = wifiOn()
+    else
+        -- Verify the connection actually works by pinging the server
+        local ok = os.execute('wget -q --spider -T 5 "' .. SERVER_URL .. '/api/poll" 2>/dev/null')
+        if ok ~= 0 then
+            log("WARN", "ensureWifi: interface up but server unreachable, reconnecting")
+            wifiOff()
+            wifiOk = wifiOn()
         end
     end
+    log("INFO", "ensureWifi: result=" .. tostring(wifiOk))
+    return wifiOk
 end
 
 -- Poll server. Returns true if Kobo should redraw.
@@ -360,54 +431,55 @@ end
 
 -- Startup
 killKOReader()
-log("Dashboard starting")
+log("INFO", "Server URL: " .. SERVER_URL)
+log("INFO", "Dashboard starting")
+-- Clear any 16-bit KOReader pixel noise from framebuffer
+os.execute("dd if=/dev/zero bs=608 count=800 2>/dev/null | tr '\\000' '\\377' > /dev/fb0 2>/dev/null")
+os.execute(FBINK .. " -s -f -q 2>/dev/null")
 local startupBat = readBattery()
-if startupBat then log("Battery at startup: " .. startupBat .. "%") end
-if not wifiIsUp() then wifiOn() end
-drawDashboard()
-log("Dashboard drawn")
+if startupBat then log("INFO", "Battery at startup: " .. startupBat .. "%") else log("WARN", "Could not read battery") end
+local wifiUp = wifiIsUp()
+log("INFO", "WiFi up at startup: " .. tostring(wifiUp))
+if not wifiUp then wifiOn() end
+local drawn = drawDashboard()
+log("INFO", "drawDashboard returned: " .. tostring(drawn))
 os.execute("rm -f " .. SIGNAL_FILE)
 
 -- Initial poll to get settings before main loop starts
 if wifiIsUp() then
-    log("Startup poll: WiFi is up")
-    local f = io.popen('wget -q -O - -T 5 "' .. SERVER_URL .. '/api/poll" 2>/dev/null', "r")
-    if f then
-        local raw = f:read("*a")
-        f:close()
-        log("Startup poll response: " .. (raw and raw:sub(1, 100) or "nil"))
-        if raw and #raw > 0 then
-            local intv = extractNum(raw, "interval")
-            if intv and intv >= 60 then refreshInterval = intv end
-            if raw:match('"ssh":true') then serverSshOn = true
-            elseif raw:match('"ssh":false') then serverSshOn = false end
-            if raw:match('"wifi":true') then serverWifiOn = true
-            elseif raw:match('"wifi":false') then serverWifiOn = false end
-            local cx = extractNum(raw, "clockX")
-            if cx then clockX = cx end
-            local cy = extractNum(raw, "clockY")
-            if cy then clockY = cy end
-            local cw = extractNum(raw, "clockW")
-            if cw then clockW = cw end
-            local ch = extractNum(raw, "clockH")
-            if ch then clockH = ch end
-            local cs = extractNum(raw, "clockSize")
-            if cs then clockSize = cs end
-            do
-                local inv = raw:match('"clockInverted":true')
-                if inv then clockInverted = true
-                elseif raw:match('"clockInverted":false') then clockInverted = false end
-            end
-            log("Startup poll: clock at " .. clockX .. "," .. clockY .. " size " .. clockW .. "x" .. clockH .. " font " .. clockSize .. " inv=" .. tostring(clockInverted))
+    log("INFO", "Startup poll: WiFi is up")
+    local raw, rc = shell('wget -q -O - -T 5 "' .. SERVER_URL .. '/api/poll"')
+    log("INFO", "Startup poll: wget rc=" .. rc .. " len=" .. (#raw or 0))
+    if raw and #raw > 0 then
+        log("INFO", "Startup poll response: " .. raw:sub(1, 200))
+        local intv = extractNum(raw, "interval")
+        if intv and intv >= 60 then refreshInterval = intv end
+        if raw:match('"ssh":true') then serverSshOn = true
+        elseif raw:match('"ssh":false') then serverSshOn = false end
+        if raw:match('"wifi":true') then serverWifiOn = true
+        elseif raw:match('"wifi":false') then serverWifiOn = false end
+        local cx = extractNum(raw, "clockX")
+        if cx then clockX = cx end
+        local cy = extractNum(raw, "clockY")
+        if cy then clockY = cy end
+        local cw = extractNum(raw, "clockW")
+        if cw then clockW = cw end
+        local ch = extractNum(raw, "clockH")
+        if ch then clockH = ch end
+        local cs = extractNum(raw, "clockSize")
+        if cs then clockSize = cs end
+        do
+            local inv = raw:match('"clockInverted":true')
+            if inv then clockInverted = true
+            elseif raw:match('"clockInverted":false') then clockInverted = false end
         end
-    else
-        log("Startup poll: popen failed")
+        log("INFO", "Startup poll: clock at " .. clockX .. "," .. clockY .. " size " .. clockW .. "x" .. clockH .. " font " .. clockSize .. " inv=" .. tostring(clockInverted))
     end
 else
-    log("Startup poll: WiFi is down")
+    log("WARN", "Startup poll: WiFi is down")
 end
 enforceSettings()
-log("Startup complete")
+log("INFO", "Startup complete")
 
 -- Main loop
 local cycle = 0
@@ -424,11 +496,15 @@ while running do
     local elapsed = now - lastLoopTime
     lastLoopTime = now
     if elapsed > CLOCK_TICK + 10 then
-        log("Wake from sleep (+" .. elapsed .. "s gap)")
+        log("INFO", "Wake from sleep (+" .. elapsed .. "s gap)")
         showStatus("Waking up...")
         -- Re-download full dashboard (framebuffer may be lost during sleep)
-        if wifiIsUp() or wifiOn() then
-            os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 15 2>/dev/null')
+        if ensureWifi() then
+            local wrc = os.execute('wget -q "' .. SERVER_URL .. '/dashboard.raw" -O /tmp/dashboard.raw -T 15 2>/dev/null')
+            local fz = io.open("/tmp/dashboard.raw", "r")
+            local sz = fz and fz:seek("end") or 0
+            if fz then fz:close() end
+            log("INFO", "Wake redownload: wget rc=" .. (wrc or -1) .. " filesize=" .. sz)
             os.execute('test -s /tmp/dashboard.raw && cat /tmp/dashboard.raw > /dev/fb0 2>/dev/null')
         end
         fb("-s -f -q")
@@ -440,16 +516,16 @@ while running do
     killKOReader()
 
     if touched then
-        log("Touch at " .. tapX .. "," .. tapY)
+        log("INFO", "Touch at " .. tapX .. "," .. tapY)
         -- Reject unset coordinates (spurious init events)
         if tapX < 0 or tapY < 0 then
             touched = false
-            log("Touch rejected: unset coordinates")
+            log("WARN", "Touch rejected: unset coordinates")
         end
     end
 
     if touched and tapX >= EXIT_X1 and tapX < EXIT_X2 and tapY >= EXIT_Y1 and tapY < EXIT_Y2 then
-        log("Exit tap at " .. tapX .. "," .. tapY)
+        log("INFO", "Exit tap at " .. tapX .. "," .. tapY)
         showStatus("Exiting to KOReader...")
         os.execute("sleep 1")
         os.execute("rm -f " .. SIGNAL_FILE)
@@ -468,7 +544,7 @@ while running do
     if touched then
         needsServer = true
         showStatus("Refreshing...")
-        log("Touch refresh triggered")
+        log("INFO", "Touch refresh triggered")
     end
 
     local sf = io.open(SIGNAL_FILE, "r")
@@ -477,7 +553,7 @@ while running do
         os.execute("rm -f " .. SIGNAL_FILE)
         needsServer = true
         showStatus("Refreshing...")
-        log("Signal file refresh triggered")
+        log("INFO", "Signal file refresh triggered")
     end
 
     -- Interval check: tickCount is in minutes (CLOCK_TICK=60)
@@ -485,20 +561,17 @@ while running do
     if tickCount * CLOCK_TICK >= refreshInterval then
         needsServer = true
         tickCount = 0
-        log("Scheduled server check (interval=" .. refreshInterval .. "s)")
+        log("INFO", "Scheduled server check (interval=" .. refreshInterval .. "s)")
     else
         tickCount = tickCount + 1
     end
 
     if needsServer then
-        local wifiOk = true
-        if not wifiIsUp() then
-            log("WiFi was down, reconnecting")
-            showStatus("WiFi connecting...")
-            wifiOk = wifiOn()
-        end
+        showStatus("WiFi connecting...")
+        local wifiOk = ensureWifi()
         if wifiOk then
             local shouldRedraw = checkServer()
+            log("INFO", "Main loop: shouldRedraw=" .. tostring(shouldRedraw) .. " touched=" .. tostring(touched or false))
             if shouldRedraw or touched then
                 drawDashboard()
                 -- Redraw clock after dashboard to ensure it's on top
@@ -508,7 +581,7 @@ while running do
             clearStatus()
         else
             showStatus("WiFi failed")
-            log("needsServer: wifiOn failed, skipping refresh")
+            log("WARN", "needsServer: wifiOn failed, skipping refresh")
         end
     end
 
@@ -521,7 +594,7 @@ while running do
     if not ok then
         local ef = io.open("/tmp/dash_err.log", "a")
         if ef then ef:write(os.date("%H:%M:%S") .. " CRASH: " .. tostring(err) .. "\n"); ef:close() end
-        log("CRASH: " .. tostring(err))
+        log("ERROR", "CRASH: " .. tostring(err))
         showStatus("Error, restarting...")
         os.execute("sleep 5")
     end
